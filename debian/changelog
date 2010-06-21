@@ -1,3 +1,9 @@
+cr3 (3.0.24-25.bradbury.2) bradbury; urgency=low
+
+  * run edict_launcher instead of edict
+
+ -- Alexander Kerner <lunohod@openinkpot.org>  Mon, 21 Jun 2010 22:16:18 +0200
+
 cr3 (3.0.24-25.bradbury.1) bradbury; urgency=low
 
   * bradbury branch
