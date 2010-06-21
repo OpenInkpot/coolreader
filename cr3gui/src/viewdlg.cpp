@@ -213,7 +213,7 @@ bool CRViewDialog::findInDictionary( lString16 pattern )
 #if USE_EXTERNAL_EDICT_DICTIONARY==1
     // external dictionary
     lString8 cmd;
-    cmd << "edict \"";
+    cmd << "edict_launcher \"";
     cmd << UnicodeToUtf8(pattern);
     cmd << "\" &";
     CRLog::info("Calling system %s", cmd.c_str());
