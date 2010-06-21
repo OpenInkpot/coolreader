@@ -1,3 +1,9 @@
+cr3 (3.0.24-25.bradbury.1) bradbury; urgency=low
+
+  * bradbury branch
+
+ -- Alexander Kerner <lunohod@openinkpot.org>  Mon, 21 Jun 2010 21:53:22 +0200
+
 cr3 (3.0.24-25) zelazny; urgency=low
 
   [ Vadim Lopatin ]
