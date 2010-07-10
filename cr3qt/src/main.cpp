@@ -57,6 +57,11 @@ int main(int argc, char *argv[])
             return 2;
         }
 
+		if ( argc>=2 && !strcmp(argv[1], "unittest") ) {
+			runTinyDomUnitTests();
+			CRLog::info("UnitTests finished: exiting");
+			return 0;
+		}
         //if ( argc!=2 ) {
         //    printf("Usage: cr3 <filename_to_open>\n");
         //    return 3;
@@ -90,6 +95,40 @@ int main(int argc, char *argv[])
     ShutdownCREngine();
     return res;
 }
+
+#ifdef _WIN32
+int WINAPI WinMain( HINSTANCE hInstance,
+    HINSTANCE hPrevInstance,
+    LPSTR lpCmdLine,
+    int nCmdShow
+	)
+{
+	wchar_t buf0[MAX_PATH];
+	GetModuleFileNameW(NULL, buf0, MAX_PATH-1);
+	lString16 str016(buf0);
+#ifdef _UNICODE
+	lString16 str116(lpCmdLine);
+#else
+	lString8 str18(lpCmdLine);
+	lString16 str116 = LocalToUnicode(str18);
+#endif
+	lString8 str0 = UnicodeToUtf8(str016);
+	lString8 str1 = UnicodeToUtf8(str116);
+	if ( !str1.empty() && str1[0]=='\"' ) {
+		// quoted filename support
+		str1.erase(0, 1);
+		int pos = str1.pos(lString8("\""));
+		if ( pos>=0 )
+			str1 = str1.substr(0, pos);
+	}
+	char * argv[2];
+	argv[0] = str0.modify();
+	argv[1] = str1.modify();
+	int argc = str1.empty() ? 1 : 2;
+	return main(argc, argv);
+}
+#endif
+
 
 /*
 bool initHyph(const char * fname)
@@ -168,7 +207,7 @@ bool getDirectoryFonts( lString16Collection & pathList, lString16 ext, lString16
 
 bool InitCREngine( const char * exename, lString16Collection & fontDirs )
 {
-    CRLog::trace("InitCREngine(%s)", exename);
+	CRLog::trace("InitCREngine(%s)", exename);
 #ifdef _WIN32
     lString16 appname( exename );
     int lastSlash=-1;
@@ -186,6 +225,7 @@ bool InitCREngine( const char * exename, lString16Collection & fontDirs )
     lString16 appPath;
     if ( lastSlash>=0 )
         appPath = appname.substr( 0, lastSlash+1 );
+	InitCREngineLog(UnicodeToUtf8(appPath).c_str());
     lString16 datadir = appPath;
 #else
     lString16 datadir = lString16(CR3_DATA_DIR);
@@ -307,8 +347,13 @@ void InitCREngineLog( const char * cfgfile )
         return;
     }
     lString16 logfname;
-    lString16 loglevelstr = L"INFO";
-        bool autoFlush = false;
+    lString16 loglevelstr = 
+#ifdef _DEBUG
+		L"TRACE";
+#else
+		L"INFO";
+#endif
+    bool autoFlush = false;
     CRPropRef logprops = LVCreatePropsContainer();
     {
         LVStreamRef cfg = LVOpenFileStream( cfgfile, LVOM_READ );

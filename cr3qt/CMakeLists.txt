@@ -4,7 +4,7 @@ INCLUDE(${QT_USE_FILE})
 SET(CR3_UIS
   src/aboutdlg.ui        src/bookmarklistdlg.ui  src/mainwindow.ui  src/settings.ui
   src/addbookmarkdlg.ui  src/filepropsdlg.ui     src/recentdlg.ui   src/tocdlg.ui
-  src/wolexportdlg.ui    src/exportprogressdlg.ui
+  src/wolexportdlg.ui    src/exportprogressdlg.ui src/searchdlg.ui
 )
 
 SET(CR3_MOC_HDRS
@@ -19,6 +19,7 @@ SET(CR3_MOC_HDRS
   src/wolexportdlg.h
   src/exportprogressdlg.h
   src/tocdlg.h
+  src/searchdlg.h
 )
 
 SET (CR3_SOURCES 
@@ -35,6 +36,7 @@ SET (CR3_SOURCES
   src/settings.cpp
   src/wolexportdlg.cpp
   src/exportprogressdlg.cpp
+  src/searchdlg.cpp
 )
 
 IF (UNIX)
@@ -46,6 +48,14 @@ ELSE()
           -DUSE_FONTCONFIG=0
     )
 ENDIF(UNIX)
+
+#IF (WIN32)
+#IF(NOT ${CMAKE_BUILD_TYPE} STREQUALS Debug)
+#SET(CMAKE_EXE_LINKER_FLAGS ${CMAKE_EXE_LINKER_FLAGS} /SUBSYSTEM:WINDOWS )
+#ENDIF(NOT ${CMAKE_BUILD_TYPE} STREQUALS Debug)
+#ENDIF (WIN32)
+
+
 
 SET(LANGUAGES ru uk de es pl)
 message( "Languages: ${LANGUAGES}" )
@@ -67,6 +77,18 @@ ENDIF(LANGUAGE_TS_FILES)
 INCLUDE_DIRECTORIES( ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_BINARY_DIR}/cr3qt )
 
 ADD_EXECUTABLE(cr3 ${CR3_SOURCES} ${CR3_RCS} ${CR3_UI_HDRS} ${CR3_MOC_SRCS} ${QM_FILES})
+
+if(WIN32)
+set_target_properties(cr3 PROPERTIES
+LINK_FLAGS_DEBUG "/SUBSYSTEM:CONSOLE")
+set_target_properties(cr3 PROPERTIES
+RELWITHDEBINFO "/SUBSYSTEM:CONSOLE")
+set_target_properties(cr3 PROPERTIES
+LINK_FLAGS_RELEASE "/SUBSYSTEM:WINDOWS")
+set_target_properties(cr3 PROPERTIES
+MINSIZEREL "/SUBSYSTEM:WINDOWS")
+endif(WIN32)
+
 
 
 IF (UNIX)

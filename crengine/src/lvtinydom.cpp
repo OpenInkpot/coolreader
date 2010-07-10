@@ -12,7 +12,7 @@
 *******************************************************/
 
 /// change in case of incompatible changes in swap/cache file format
-#define CACHE_FILE_FORMAT_VERSION "3.02.16"
+#define CACHE_FILE_FORMAT_VERSION "3.02.17"
 
 #ifndef DOC_DATA_COMPRESSION_LEVEL
 /// data compression level (0=no compression, 1=fast compressions, 3=normal compression)
@@ -30,7 +30,7 @@
 //--------------------------------------------------------
 // cache memory sizes
 //--------------------------------------------------------
-#if RAM_COMPRESSED_BUFFER_ENABLED!=0
+#if RAM_COMPRESSED_BUFFER_ENABLED==1
 
 // allowed compressed data buffers in RAM
 #define ENABLED_BLOCK_WRITE_CACHE 1
@@ -108,7 +108,7 @@
 
 static const char CACHE_FILE_MAGIC[] = "CoolReader Cache"
                                        " File v" CACHE_FILE_FORMAT_VERSION ": "
-#if RAM_COMPRESSED_BUFFER_ENABLED!=0
+#if RAM_COMPRESSED_BUFFER_ENABLED==1
                                        "c1"
 #else
                                        "c0"
@@ -1460,7 +1460,7 @@ bool tinyNodeCollection::loadNodeData( lUInt16 type, ldomNode ** list, int nodec
             sz = nodecount - offs;
         }
 
-#if 0 //RAM_COMPRESSED_BUFFER_ENABLED!=0
+#if 0 //RAM_COMPRESSED_BUFFER_ENABLED==1
         lUInt8 * packed = NULL;
         int packedsize = 0;
         if ( !_cacheFile->read( type, i, packed, packedsize ) )
@@ -1511,7 +1511,7 @@ bool tinyNodeCollection::saveNodeData( lUInt16 type, ldomNode ** list, int nodec
         memcpy( buf, list[i], sizeof(ldomNode)*sz );
         for ( int j=0; j<sz; j++ )
             buf[j].setDocumentIndex( _docIndex );
-#if 0 //RAM_COMPRESSED_BUFFER_ENABLED!=0
+#if 0 //RAM_COMPRESSED_BUFFER_ENABLED==1
         lUInt8 * packed = NULL;
         lUInt32 packedsize = 0;
         if ( !ldomPack( (lUInt8*)buf, sizeof(ldomNode)*sz, packed, packedsize ) )
@@ -1770,7 +1770,7 @@ bool ldomDataStorageManager::save()
     buf << (lUInt32)n;
     for ( int i=0; i<n; i++ ) {
         buf <<
-#if RAM_COMPRESSED_BUFFER_ENABLED!=0
+#if RAM_COMPRESSED_BUFFER_ENABLED==1
                 (lUInt32)_chunks[i]->_compsize <<
 #endif
                 (lUInt32)_chunks[i]->_bufpos;
@@ -1802,7 +1802,7 @@ bool ldomDataStorageManager::load()
     lUInt32 uncompsize = 0;
     for ( unsigned i=0; i<n; i++ ) {
         buf >>
-#if RAM_COMPRESSED_BUFFER_ENABLED!=0
+#if RAM_COMPRESSED_BUFFER_ENABLED==1
                 compsize >>
 #endif
                 uncompsize;
@@ -2020,11 +2020,11 @@ void ldomDataStorageManager::compact( int reservedSpace )
     if ( _uncompressedSize + reservedSpace > _maxUncompressedSize + _maxUncompressedSize/10 ) { // allow +10% overflow
         // do compacting
         int sumsize = reservedSpace;
-#if RAM_COMPRESSED_BUFFER_ENABLED!=0
+#if RAM_COMPRESSED_BUFFER_ENABLED==1
         int sumpackedsize = 0;
 #endif
         for ( ldomTextStorageChunk * p = _recentChunk; p; p = p->_nextRecent ) {
-#if RAM_COMPRESSED_BUFFER_ENABLED!=0
+#if RAM_COMPRESSED_BUFFER_ENABLED==1
             if ( p->_bufsize >= 0 ) {
                 if ( (int)p->_bufsize + sumsize < _maxUncompressedSize || (p==_activeChunk && reservedSpace<0xFFFFFFF)) {
                     // fits
@@ -2076,12 +2076,12 @@ ldomDataStorageManager::ldomDataStorageManager( tinyNodeCollection * owner, char
 , _activeChunk(NULL)
 , _recentChunk(NULL)
 , _cache(NULL)
-#if RAM_COMPRESSED_BUFFER_ENABLED!=0
+#if RAM_COMPRESSED_BUFFER_ENABLED==1
 , _compressedSize(0)
 #endif
 , _uncompressedSize(0)
 , _maxUncompressedSize(maxUnpackedSize)
-#if RAM_COMPRESSED_BUFFER_ENABLED!=0
+#if RAM_COMPRESSED_BUFFER_ENABLED==1
 , _maxCompressedSize(maxPackedSize)
 #endif
 , _chunkSize(chunkSize)
@@ -2097,7 +2097,7 @@ ldomDataStorageManager::~ldomDataStorageManager()
 ldomTextStorageChunk::ldomTextStorageChunk( ldomDataStorageManager * manager, int index, int compsize, int uncompsize )
 : _manager(manager)
 , _buf(NULL)   /// buffer for uncompressed data
-#if RAM_COMPRESSED_BUFFER_ENABLED!=0
+#if RAM_COMPRESSED_BUFFER_ENABLED==1
 , _compbuf(NULL) /// buffer for compressed data, NULL if can be read from file
 , _compsize(compsize)   /// _compbuf (compressed) area size (in file or compbuffer)
 #endif
@@ -2114,7 +2114,7 @@ ldomTextStorageChunk::ldomTextStorageChunk( ldomDataStorageManager * manager, in
 ldomTextStorageChunk::ldomTextStorageChunk( int preAllocSize, ldomDataStorageManager * manager, int index )
 : _manager(manager)
 , _buf(NULL)   /// buffer for uncompressed data
-#if RAM_COMPRESSED_BUFFER_ENABLED!=0
+#if RAM_COMPRESSED_BUFFER_ENABLED==1
 , _compbuf(NULL) /// buffer for compressed data, NULL if can be read from file
 , _compsize(0)   /// _compbuf (compressed) area size (in file or compbuffer)
 #endif
@@ -2134,7 +2134,7 @@ ldomTextStorageChunk::ldomTextStorageChunk( int preAllocSize, ldomDataStorageMan
 ldomTextStorageChunk::ldomTextStorageChunk( ldomDataStorageManager * manager, int index )
 : _manager(manager)
 , _buf(NULL)   /// buffer for uncompressed data
-#if RAM_COMPRESSED_BUFFER_ENABLED!=0
+#if RAM_COMPRESSED_BUFFER_ENABLED==1
 , _compbuf(NULL) /// buffer for compressed data, NULL if can be read from file
 , _compsize(0)   /// _compbuf (compressed) area size (in file or compbuffer)
 #endif
@@ -2158,7 +2158,7 @@ bool ldomTextStorageChunk::save()
 
 ldomTextStorageChunk::~ldomTextStorageChunk()
 {
-#if RAM_COMPRESSED_BUFFER_ENABLED!=0
+#if RAM_COMPRESSED_BUFFER_ENABLED==1
     setpacked(NULL, 0);
 #endif
     setunpacked(NULL, 0);
@@ -2169,7 +2169,7 @@ static int dummy1_valgrind_test = 0;
 /// pack data, and remove unpacked, put packed data to cache file
 bool ldomTextStorageChunk::swapToCache( bool removeFromMemory )
 {
-#if RAM_COMPRESSED_BUFFER_ENABLED!=0
+#if RAM_COMPRESSED_BUFFER_ENABLED==1
     bool dropPacked = false;
     if ( removeFromMemory ) {
         compact();
@@ -2184,7 +2184,7 @@ bool ldomTextStorageChunk::swapToCache( bool removeFromMemory )
 #endif
     if ( !_manager->_cache )
         return true;
-#if RAM_COMPRESSED_BUFFER_ENABLED!=0
+#if RAM_COMPRESSED_BUFFER_ENABLED==1
     if ( _compbuf ) {
         if ( !_saved && _manager->_cache) {
             CRLog::debug("Writing %d bytes of chunk %c%d to cache", _compsize, _type, _index);
@@ -2221,7 +2221,7 @@ bool ldomTextStorageChunk::swapToCache( bool removeFromMemory )
 /// read packed data from cache
 bool ldomTextStorageChunk::restoreFromCache()
 {
-#if RAM_COMPRESSED_BUFFER_ENABLED!=0
+#if RAM_COMPRESSED_BUFFER_ENABLED==1
     if ( _compbuf || _buf)
         return true;
 #else
@@ -2230,7 +2230,7 @@ bool ldomTextStorageChunk::restoreFromCache()
 #endif
     if ( !_saved )
         return false;
-#if RAM_COMPRESSED_BUFFER_ENABLED!=0
+#if RAM_COMPRESSED_BUFFER_ENABLED==1
     int compsize;
     if ( !_manager->_cache->read( _manager->cacheType(), _index, _compbuf, compsize ) )
         return false;
@@ -2308,7 +2308,7 @@ int ldomTextStorageChunk::addText( lUInt32 dataIndex, lUInt32 parentIndex, const
 int ldomTextStorageChunk::addElem( lUInt32 dataIndex, lUInt32 parentIndex, int childCount, int attrCount )
 {
     int itemsize = (sizeof(ElementDataStorageItem) + attrCount*sizeof(lUInt16)*3 + childCount*sizeof(lUInt32) - sizeof(lUInt32) + 15) & 0xFFFFFFF0;
-#if RAM_COMPRESSED_BUFFER_ENABLED!=0
+#if RAM_COMPRESSED_BUFFER_ENABLED==1
     if ( _compbuf!=NULL ) {
         CRLog::debug("Adding new item of size %d to compressed block %c%d of size %d", itemsize, _type, _index, _bufpos);
         if ( !_buf ) {
@@ -2391,7 +2391,7 @@ void ldomTextStorageChunk::modified()
     if ( !_buf ) {
         CRLog::error("Modified is called for node which is not in memory");
     }
-#if RAM_COMPRESSED_BUFFER_ENABLED!=0
+#if RAM_COMPRESSED_BUFFER_ENABLED==1
     if ( _compbuf ) {
         if ( _type=='t' ) {
             CRLog::warn("ldomTextStorageChunk::modified() called for text node %c%d", _type, _index);
@@ -2490,7 +2490,7 @@ bool ldomUnpack( const lUInt8 * compbuf, int compsize, lUInt8 * &dstbuf, lUInt32
     return true;
 }
 
-#if RAM_COMPRESSED_BUFFER_ENABLED!=0
+#if RAM_COMPRESSED_BUFFER_ENABLED==1
 
 /// unpack data from compbuf to _buf
 bool ldomTextStorageChunk::unpack()
@@ -2577,7 +2577,7 @@ void ldomTextStorageChunk::setunpacked( const lUInt8 * buf, int bufsize )
     }
 }
 
-#if RAM_COMPRESSED_BUFFER_ENABLED!=0
+#if RAM_COMPRESSED_BUFFER_ENABLED==1
 /// pack data, and remove unpacked
 void ldomTextStorageChunk::compact()
 {
@@ -2594,7 +2594,7 @@ void ldomTextStorageChunk::compact()
 void ldomTextStorageChunk::ensureUnpacked()
 {
     if ( !_buf ) {
-#if RAM_COMPRESSED_BUFFER_ENABLED!=0
+#if RAM_COMPRESSED_BUFFER_ENABLED==1
         if (_compbuf) {
             unpack();
             _manager->compact( 0 );
@@ -2606,7 +2606,7 @@ void ldomTextStorageChunk::ensureUnpacked()
                 crFatalError( 111, "restoreFromCache() failed for chunk");
             }
             _manager->compact( 0 );
-#if RAM_COMPRESSED_BUFFER_ENABLED!=0
+#if RAM_COMPRESSED_BUFFER_ENABLED==1
             unpack();
 #endif
         }
@@ -2810,6 +2810,7 @@ ldomNode * lxmlDocBase::getRootNode()
 
 ldomDocument::ldomDocument()
 : m_toc(this)
+, _last_docflags(0)
 , _page_height(0)
 , _page_width(0)
 , _rendered(false)
@@ -2845,6 +2846,7 @@ ldomDocument::ldomDocument( ldomDocument & doc )
 : lxmlDocBase(doc)
 , _def_font(doc._def_font) // default font
 , _def_style(doc._def_style)
+, _last_docflags(doc._last_docflags)
 , _page_height(doc._page_height)
 , _page_width(doc._page_width)
 , _container(doc._container)
@@ -2998,7 +3000,13 @@ bool ldomDocument::setRenderProps( int width, int dy, bool showCover, int y0, fo
     s->text_indent.value = 0;
     s->line_height.type = css_val_percent;
     s->line_height.value = def_interline_space;
-    lUInt32 defStyleHash = (((_stylesheet.getHash() * 31) + calcHash(_def_style))*31 + calcHash(_def_font));
+    //lUInt32 defStyleHash = (((_stylesheet.getHash() * 31) + calcHash(_def_style))*31 + calcHash(_def_font));
+    //defStyleHash = defStyleHash * 31 + getDocFlags();
+    if ( _last_docflags != getDocFlags() ) {
+        CRLog::trace("ldomDocument::setRenderProps() - doc flags changed");
+        _last_docflags = getDocFlags();
+        changed = true;
+    }
     if ( calcHash(_def_style) != calcHash(s) ) {
         CRLog::trace("ldomDocument::setRenderProps() - style is changed");
         _def_style = s;
@@ -3078,6 +3086,23 @@ int tinyNodeCollection::calcFinalBlocks()
     return cnt;
 }
 
+void ldomDocument::applyDocumentStyleSheet()
+{
+    if ( !getDocFlag(DOC_FLAG_ENABLE_INTERNAL_STYLES) ) {
+        CRLog::trace("applyDocumentStyleSheet() : DOC_FLAG_ENABLE_INTERNAL_STYLES is disabled");
+        return;
+    }
+    ldomXPointer ss = createXPointer(lString16(L"/FictionBook/stylesheet"));
+    if ( !ss.isNull() ) {
+        lString16 css = ss.getText('\n');
+        if ( !css.empty() ) {
+            CRLog::debug("Using internal FB2 document stylesheet:\n%s", LCSTR(css));
+            _stylesheet.parse(LCSTR(css));
+        }
+    }
+}
+
+
 int ldomDocument::render( LVRendPageList * pages, LVDocViewCallback * callback, int width, int dy, bool showCover, int y0, font_ref_t def_font, int def_interline_space )
 {
     CRLog::info("Render is called for width %d, pageHeight=%d, fontFace=%s", width, dy, def_font->getTypeFace().c_str() );
@@ -3114,8 +3139,15 @@ int ldomDocument::render( LVRendPageList * pages, LVDocViewCallback * callback, 
         //css_style_ref_t roots = root->getStyle();
         //CRLog::trace("validate 2...");
         //validateDocument();
+
+        CRLog::trace("Save stylesheet...");
+        _stylesheet.push();
         CRLog::trace("Init node styles...");
+        applyDocumentStyleSheet();
         getRootNode()->initNodeStyleRecursive();
+        CRLog::trace("Restoring stylesheet...");
+        _stylesheet.pop();
+
         CRLog::trace("init render method...");
         getRootNode()->initNodeRendMethodRecursive();
 
@@ -3979,6 +4011,8 @@ ldomDocumentWriter::~ldomDocumentWriter()
     while (_currNode)
         _currNode = pop( _currNode, _currNode->getElement()->getNodeId() );
     if ( _document->isDefStyleSet() ) {
+        if ( _popStyleOnFinish )
+            _document->getStyleSheet()->pop();
         _document->getRootNode()->initNodeStyle();
         _document->getRootNode()->initNodeFont();
         //if ( !_document->validateDocument() )
@@ -4008,6 +4042,12 @@ void ldomDocumentWriter::OnTagClose( const lChar16 *, const lChar16 * tagname )
     if ( id==_stopTagId ) {
         //CRLog::trace("stop tag found, stopping...");
         _parser->Stop();
+    }
+
+    if ( !_popStyleOnFinish && !lStr_cmp(tagname, L"stylesheet") ) {
+        _document->getStyleSheet()->push();
+        _popStyleOnFinish = true;
+        _document->applyDocumentStyleSheet();
     }
     //logfile << " !c!\n";
 }
@@ -4417,7 +4457,7 @@ ldomXPointer ldomDocument::createXPointer( const lString16 & xPointerStr )
     if ( xPointerStr[0]=='#' ) {
         lString16 id = xPointerStr.substr(1);
         lUInt16 idid = getAttrValueIndex(id.c_str());
-        int nodeIndex;
+        lInt32 nodeIndex;
         if ( _idNodeMap.get(idid, nodeIndex) ) {
             ldomNode * node = getTinyNode(nodeIndex);
             if ( node && node->isElement() ) {
@@ -4446,13 +4486,13 @@ ldomNode * ldomXPointer::getFinalNode() const
 #endif
 
 /// create xpointer from doc point
-ldomXPointer ldomDocument::createXPointer( lvPoint pt )
+ldomXPointer ldomDocument::createXPointer( lvPoint pt, int direction )
 {
     //
     ldomXPointer ptr;
     if ( !getRootNode() )
         return ptr;
-    ldomNode * finalNode = getRootNode()->elementFromPoint( pt );
+    ldomNode * finalNode = getRootNode()->elementFromPoint( pt, direction );
     if ( !finalNode ) {
         if ( pt.y >= getFullHeight()) {
             ldomNode * node = getRootNode()->getLastTextChild();
@@ -4540,6 +4580,7 @@ bool ldomXPointer::getRect(lvRect & rect) const
     if ( isNull() )
         return false;
     ldomNode * p = isElement() ? getNode() : getNode()->getParentNode();
+    ldomNode * p0 = p;
     ldomNode * finalNode = NULL;
     if ( !p ) {
         //CRLog::trace("ldomXPointer::getRect() - p==NULL");
@@ -4558,6 +4599,14 @@ bool ldomXPointer::getRect(lvRect & rect) const
         if ( p==mainNode )
             break;
     }
+
+    if ( finalNode==NULL ) {
+        lvRect rc;
+        p0->getAbsRect( rc );
+        CRLog::debug("node w/o final parent: %d..%d", rc.top, rc.bottom);
+
+    }
+
     if ( finalNode!=NULL ) {
         lvRect rc;
         finalNode->getAbsRect( rc );
@@ -5207,19 +5256,32 @@ void ldomXRangeList::split( ldomXRange * r )
 
 #if BUILD_LITE!=1
 
-bool ldomDocument::findText( lString16 pattern, bool caseInsensitive, int minY, int maxY, LVArray<ldomWord> & words, int maxCount )
+bool ldomDocument::findText( lString16 pattern, bool caseInsensitive, bool reverse, int minY, int maxY, LVArray<ldomWord> & words, int maxCount, int maxHeight )
 {
     if ( minY<0 )
         minY = 0;
     int fh = getFullHeight();
     if ( maxY<=0 || maxY>fh )
         maxY = fh;
-    ldomXPointer start = createXPointer( lvPoint(minY, 0) );
-    ldomXPointer end = createXPointer( lvPoint(maxY, 10000) );
+    ldomXPointer start = createXPointer( lvPoint(0, minY), reverse?-1:1 );
+    ldomXPointer end = createXPointer( lvPoint(10000, maxY), reverse?-1:1 );
     if ( start.isNull() || end.isNull() )
         return false;
     ldomXRange range( start, end );
-    return range.findText( pattern, caseInsensitive, words, maxCount );
+    CRLog::debug("ldomDocument::findText() for Y %d..%d, range %d..%d", minY, maxY, start.toPoint().y, end.toPoint().y);
+    if ( range.getStart().toPoint().y==-1 ) {
+        range.getStart().nextVisibleText();
+        CRLog::debug("ldomDocument::findText() updated range %d..%d", range.getStart().toPoint().y, range.getEnd().toPoint().y);
+    }
+    if ( range.getEnd().toPoint().y==-1 ) {
+        range.getEnd().prevVisibleText();
+        CRLog::debug("ldomDocument::findText() updated range %d..%d", range.getStart().toPoint().y, range.getEnd().toPoint().y);
+    }
+    if ( range.isNull() ) {
+        CRLog::debug("No text found: Range is empty");
+        return false;
+    }
+    return range.findText( pattern, caseInsensitive, reverse, words, maxCount, maxHeight );
 }
 
 static bool findText( const lString16 & str, int & pos, const lString16 & pattern )
@@ -5246,30 +5308,110 @@ static bool findText( const lString16 & str, int & pos, const lString16 & patter
     return false;
 }
 
+static bool findTextRev( const lString16 & str, int & pos, const lString16 & pattern )
+{
+    int len = pattern.length();
+    if ( pos+len>(int)str.length() )
+        pos = str.length()-len;
+    if ( pos < 0 )
+        return false;
+    const lChar16 * s1 = str.c_str() + pos;
+    const lChar16 * s2 = pattern.c_str();
+    int nlen = pos - len;
+    for ( int j=nlen-1; j>=0; j-- ) {
+        bool matched = true;
+        for ( int i=0; i<len; i++ ) {
+            if ( s1[i] != s2[i] ) {
+                matched = false;
+                break;
+            }
+        }
+        if ( matched )
+            return true;
+        s1--;
+        pos--;
+    }
+    return false;
+}
+
 /// searches for specified text inside range
-bool ldomXRange::findText( lString16 pattern, bool caseInsensitive, LVArray<ldomWord> & words, int maxCount )
+bool ldomXRange::findText( lString16 pattern, bool caseInsensitive, bool reverse, LVArray<ldomWord> & words, int maxCount, int maxHeight )
 {
     if ( caseInsensitive )
         pattern.lowercase();
     words.clear();
     if ( pattern.empty() )
         return false;
-    if ( !_start.isText() )
-        _start.nextVisibleText();
-    while ( !isNull() ) {
-        int offs = _start.getOffset();
-        lString16 txt = _start.getNode()->getText();
-        if ( caseInsensitive )
-            txt.lowercase();
-
-        while ( ::findText( txt, offs, pattern ) ) {
-            words.add( ldomWord(_start.getNode(), offs, offs + pattern.length() ) );
-            offs++;
+    if ( reverse ) {
+        // reverse search
+        if ( !_end.isText() ) {
+            _end.prevVisibleText();
+            lString16 txt = _end.getNode()->getText();
+            _end.setOffset(txt.length());
         }
-        if ( !_start.nextVisibleText() )
-            break;
-        if ( words.length() >= maxCount )
-            break;
+        int firstFoundTextY = -1;
+        while ( !isNull() ) {
+
+            lString16 txt = _end.getNode()->getText();
+            int offs = _end.getOffset();
+
+            if ( firstFoundTextY!=-1 && maxHeight>0 ) {
+                ldomXPointer p( _start.getNode(), offs );
+                int currentTextY = p.toPoint().y;
+                if ( currentTextY<firstFoundTextY-maxHeight )
+                    return words.length()>0;
+            }
+
+            if ( caseInsensitive )
+                txt.lowercase();
+
+            while ( ::findTextRev( txt, offs, pattern ) ) {
+                if ( !words.length() && maxHeight>0 ) {
+                    ldomXPointer p( _end.getNode(), offs );
+                    firstFoundTextY = p.toPoint().y;
+                }
+                words.add( ldomWord(_end.getNode(), offs, offs + pattern.length() ) );
+                offs--;
+            }
+            if ( !_end.prevVisibleText() )
+                break;
+            txt = _end.getNode()->getText();
+            _end.setOffset(txt.length());
+            if ( words.length() >= maxCount )
+                break;
+        }
+    } else {
+        // direct search
+        if ( !_start.isText() )
+            _start.nextVisibleText();
+        int firstFoundTextY = -1;
+        while ( !isNull() ) {
+            int offs = _start.getOffset();
+
+            if ( firstFoundTextY!=-1 && maxHeight>0 ) {
+                ldomXPointer p( _start.getNode(), offs );
+                int currentTextY = p.toPoint().y;
+                if ( currentTextY>firstFoundTextY+maxHeight )
+                    return words.length()>0;
+            }
+
+            lString16 txt = _start.getNode()->getText();
+            if ( caseInsensitive )
+                txt.lowercase();
+
+            while ( ::findText( txt, offs, pattern ) ) {
+                if ( !words.length() && maxHeight>0 ) {
+                    ldomXPointer p( _start.getNode(), offs );
+                    firstFoundTextY = p.toPoint().y;
+                }
+                words.add( ldomWord(_start.getNode(), offs, offs + pattern.length() ) );
+                offs++;
+            }
+            if ( !_start.nextVisibleText() )
+                break;
+            if ( words.length() >= maxCount )
+                break;
+        }
     }
     return words.length() > 0;
 }
@@ -6121,6 +6263,8 @@ lString16 ldomXPointer::getHRef()
     if ( !node )
         return lString16();
     lString16 ref = node->getAttributeValue( LXML_NS_ANY, attr_href );
+    if ( !ref.empty() && ref[0]!='#' )
+        ref = DecodeHTMLUrlString(ref);
     return ref;
 }
 
@@ -6201,7 +6345,7 @@ ldomDocument * LVParseHTMLStream( LVStreamRef stream,
 
 static lString16 escapeDocPath( lString16 path )
 {
-    for ( int i=0; i<path.length(); i++ ) {
+    for ( unsigned i=0; i<path.length(); i++ ) {
         lChar16 ch = path[i];
         if ( ch=='/' || ch=='\\')
             path[i] = '_';
@@ -7577,7 +7721,7 @@ void ldomDocument::updateRenderContext()
     int dx = _page_width;
     int dy = _page_height;
     lUInt32 styleHash = calcStyleHash();
-    styleHash = styleHash * 31 + calcGlobalSettingsHash();
+    styleHash = (styleHash * 31 + calcGlobalSettingsHash()) * 31 + getDocFlags();
     lUInt32 stylesheetHash = (((_stylesheet.getHash() * 31) + calcHash(_def_style))*31 + calcHash(_def_font));
     //calcStyleHash( getRootNode(), styleHash );
     _hdr.render_style_hash = styleHash;
@@ -7597,7 +7741,7 @@ bool ldomDocument::checkRenderContext()
     lUInt32 styleHash = calcStyleHash();
     lUInt32 stylesheetHash = (((_stylesheet.getHash() * 31) + calcHash(_def_style))*31 + calcHash(_def_font));
     //calcStyleHash( getRootNode(), styleHash );
-    styleHash = styleHash * 31 + calcGlobalSettingsHash();
+    styleHash = (styleHash * 31 + calcGlobalSettingsHash()) * 31 + getDocFlags();
     bool res = true;
     if ( styleHash != _hdr.render_style_hash ) {
         CRLog::info("checkRenderContext: Style hash doesn't match %x!=%x", styleHash, _hdr.render_style_hash);
@@ -8532,7 +8676,7 @@ ldomNode * ldomNode::getLastTextChild()
 
 #if BUILD_LITE!=1
 /// find node by coordinates of point in formatted document
-ldomNode * ldomNode::elementFromPoint( lvPoint pt )
+ldomNode * ldomNode::elementFromPoint( lvPoint pt, int direction )
 {
     ASSERT_NODE_NOT_NULL;
     if ( !isElement() )
@@ -8542,20 +8686,36 @@ ldomNode * ldomNode::elementFromPoint( lvPoint pt )
     if ( enode->getRendMethod() == erm_invisible ) {
         return NULL;
     }
-    if ( pt.y < fmt.getY() )
+    if ( pt.y < fmt.getY() ) {
+        if ( direction>0 && enode->getRendMethod() == erm_final )
+            return this;
         return NULL;
-    if ( pt.y >= fmt.getY() + fmt.getHeight() )
+    }
+    if ( pt.y >= fmt.getY() + fmt.getHeight() ) {
+        if ( direction<0 && enode->getRendMethod() == erm_final )
+            return this;
         return NULL;
+    }
     if ( enode->getRendMethod() == erm_final ) {
         return this;
     }
     int count = getChildCount();
-    for ( int i=0; i<count; i++ ) {
-        ldomNode * p = getChildNode( i );
-        ldomNode * e = p->elementFromPoint( lvPoint( pt.x - fmt.getX(),
-                pt.y - fmt.getY() ) );
-        if ( e )
-            return e;
+    if ( direction>=0 ) {
+        for ( int i=0; i<count; i++ ) {
+            ldomNode * p = getChildNode( i );
+            ldomNode * e = p->elementFromPoint( lvPoint( pt.x - fmt.getX(),
+                    pt.y - fmt.getY() ), direction );
+            if ( e )
+                return e;
+        }
+    } else {
+        for ( int i=count-1; i>=0; i-- ) {
+            ldomNode * p = getChildNode( i );
+            ldomNode * e = p->elementFromPoint( lvPoint( pt.x - fmt.getX(),
+                    pt.y - fmt.getY() ), direction );
+            if ( e )
+                return e;
+        }
     }
     return this;
 }
@@ -8564,7 +8724,7 @@ ldomNode * ldomNode::elementFromPoint( lvPoint pt )
 ldomNode * ldomNode::finalBlockFromPoint( lvPoint pt )
 {
     ASSERT_NODE_NOT_NULL;
-    ldomNode * elem = elementFromPoint( pt );
+    ldomNode * elem = elementFromPoint( pt, 0 );
     if ( elem && elem->getRendMethod() == erm_final )
         return elem;
     return NULL;
@@ -9060,6 +9220,7 @@ LVImageSourceRef ldomNode::getObjectImageSource()
         refName = getAttributeValue( LXML_NS_NONE, srcId );
     if ( refName.length()<2 )
         return ref;
+    refName = DecodeHTMLUrlString(refName);
     if (getDocument()->_urlImageMap.get( refName, ref ) )
         return ref; // found in cache
 
@@ -9243,41 +9404,41 @@ void tinyNodeCollection::dumpStatistics()
     CRLog::info("*** Document memory usage: "
                 "elements:%d, textNodes:%d, "
                 "ptext=("
-#if RAM_COMPRESSED_BUFFER_ENABLED!=0
+#if RAM_COMPRESSED_BUFFER_ENABLED==1
                 "%d compressed, "
 #endif
                 "%d uncompressed), "
                 "ptelems=("
-#if RAM_COMPRESSED_BUFFER_ENABLED!=0
+#if RAM_COMPRESSED_BUFFER_ENABLED==1
                 "%d compressed, "
 #endif
                 "%d uncompressed), "
                 "rects=("
-#if RAM_COMPRESSED_BUFFER_ENABLED!=0
+#if RAM_COMPRESSED_BUFFER_ENABLED==1
                 "%d compressed, "
 #endif
                 "%d uncompressed), "
                 "nodestyles=("
-#if RAM_COMPRESSED_BUFFER_ENABLED!=0
+#if RAM_COMPRESSED_BUFFER_ENABLED==1
                 "%d compressed, "
 #endif
                 "%d uncompressed), "
                 "styles:%d, fonts:%d, renderedNodes:%d, "
                 "totalNodes:%d(%dKb), mutableElements:%d(~%dKb)",
                 _elemCount, _textCount,
-#if RAM_COMPRESSED_BUFFER_ENABLED!=0
+#if RAM_COMPRESSED_BUFFER_ENABLED==1
                 _textStorage.getCompressedSize(),
 #endif
                 _textStorage.getUncompressedSize(),
-#if RAM_COMPRESSED_BUFFER_ENABLED!=0
+#if RAM_COMPRESSED_BUFFER_ENABLED==1
                 _elemStorage.getCompressedSize(),
 #endif
                 _elemStorage.getUncompressedSize(),
-#if RAM_COMPRESSED_BUFFER_ENABLED!=0
+#if RAM_COMPRESSED_BUFFER_ENABLED==1
                 _rectStorage.getCompressedSize(),
 #endif
                 _rectStorage.getUncompressedSize(),
-#if RAM_COMPRESSED_BUFFER_ENABLED!=0
+#if RAM_COMPRESSED_BUFFER_ENABLED==1
                 _styleStorage.getCompressedSize(),
 #endif
                 _styleStorage.getUncompressedSize(),
@@ -9453,7 +9614,11 @@ void testCacheFile()
     CRLog::info("Finished CacheFile unit test");
 }
 
+#ifdef _WIN32
+#define TEST_FN_TO_OPEN "/projects/test/bibl.fb2.zip"
+#else
 #define TEST_FN_TO_OPEN "/home/lve/src/test/bibl.fb2.zip"
+#endif
 
 void runFileCacheTest()
 {

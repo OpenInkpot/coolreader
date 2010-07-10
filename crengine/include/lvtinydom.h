@@ -183,12 +183,12 @@ protected:
     ldomTextStorageChunk * _activeChunk;
     ldomTextStorageChunk * _recentChunk;
     CacheFile * _cache;
-#if RAM_COMPRESSED_BUFFER_ENABLED!=0
+#if RAM_COMPRESSED_BUFFER_ENABLED==1
     int _compressedSize;
 #endif
     int _uncompressedSize;
     int _maxUncompressedSize;
-#if RAM_COMPRESSED_BUFFER_ENABLED!=0
+#if RAM_COMPRESSED_BUFFER_ENABLED==1
     int _maxCompressedSize;
 #endif
     int _chunkSize;
@@ -206,7 +206,7 @@ public:
     void setCache( CacheFile * cache );
     /// checks buffer sizes, compacts most unused chunks
     void compact( int reservedSpace );
-#if RAM_COMPRESSED_BUFFER_ENABLED!=0
+#if RAM_COMPRESSED_BUFFER_ENABLED==1
     int getCompressedSize() { return _compressedSize; }
 #endif
     int getUncompressedSize() { return _uncompressedSize; }
@@ -249,11 +249,11 @@ class ldomTextStorageChunk
     friend class ldomDataStorageManager;
     ldomDataStorageManager * _manager;
     lUInt8 * _buf;     /// buffer for uncompressed data
-#if RAM_COMPRESSED_BUFFER_ENABLED!=0
+#if RAM_COMPRESSED_BUFFER_ENABLED==1
     lUInt8 * _compbuf; /// buffer for compressed data, NULL if can be read from file
 #endif
     //lUInt32 _filepos;  /// position in swap file
-#if RAM_COMPRESSED_BUFFER_ENABLED!=0
+#if RAM_COMPRESSED_BUFFER_ENABLED==1
     lUInt32 _compsize; /// _compbuf (compressed) area size (in file or compbuffer)
 #endif
     lUInt32 _bufsize;  /// _buf (uncompressed) area size, bytes
@@ -264,7 +264,7 @@ class ldomTextStorageChunk
     ldomTextStorageChunk * _prevRecent;
     bool _saved;
 
-#if RAM_COMPRESSED_BUFFER_ENABLED!=0
+#if RAM_COMPRESSED_BUFFER_ENABLED==1
     bool unpack( const lUInt8 * compbuf, int compsize ); /// unpack data from _compbuf to _buf
     bool pack( const lUInt8 * buf, int bufsize );   /// pack data from buf[bufsize] to _compbuf
     bool unpack();                                  /// unpack data from compbuf to _buf
@@ -701,7 +701,7 @@ public:
 
 #if BUILD_LITE!=1
     /// find node by coordinates of point in formatted document
-    ldomNode * elementFromPoint( lvPoint pt );
+    ldomNode * elementFromPoint( lvPoint pt, int direction );
     /// find final node by coordinates of point in formatted document
     ldomNode * finalBlockFromPoint( lvPoint pt );
 #endif
@@ -1469,7 +1469,7 @@ public:
     ldomNode * getNearestCommonParent();
 
     /// searches for specified text inside range
-    bool findText( lString16 pattern, bool caseInsensitive, LVArray<ldomWord> & words, int maxCount );
+    bool findText( lString16 pattern, bool caseInsensitive, bool reverse, LVArray<ldomWord> & words, int maxCount, int maxHeight );
 };
 
 class ldomMarkedText
@@ -1682,6 +1682,7 @@ class ldomDocument : public lxmlDocBase
 private:
     font_ref_t _def_font; // default font
     css_style_ref_t _def_style;
+    int _last_docflags;
     int _page_height;
     int _page_width;
     bool _rendered;
@@ -1698,6 +1699,8 @@ private:
 protected:
 
     LVTocItem m_toc;
+
+    void applyDocumentStyleSheet();
 
 public:
 
@@ -1783,11 +1786,11 @@ public:
     ldomXPointer createXPointer( ldomNode * baseNode, const lString16 & xPointerStr );
 #if BUILD_LITE!=1
     /// create xpointer from doc point
-    ldomXPointer createXPointer( lvPoint pt );
+    ldomXPointer createXPointer( lvPoint pt, int direction=0 );
     /// get rendered block cache object
     CVRendBlockCache & getRendBlockCache() { return _renderedBlockCache; }
 
-    bool findText( lString16 pattern, bool caseInsensitive, int minY, int maxY, LVArray<ldomWord> & words, int maxCount );
+    bool findText( lString16 pattern, bool caseInsensitive, bool reverse, int minY, int maxY, LVArray<ldomWord> & words, int maxCount, int maxHeight );
 #endif
 };
 
@@ -1843,6 +1846,7 @@ protected:
     ldomElementWriter * _currNode;
     bool _errFlag;
     bool _headerOnly;
+    bool _popStyleOnFinish;
     lUInt16 _stopTagId;
     //============================
     lUInt32 _flags;

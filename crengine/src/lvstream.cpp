@@ -979,6 +979,8 @@ public:
     virtual lverror_t Flush( bool sync )
     {
 #ifdef _WIN32
+		if ( m_hFile==INVALID_HANDLE_VALUE || !FlushFileBuffers( m_hFile ) )
+            return LVERR_FAIL;
 #else
         if ( m_fd==-1 )
             return LVERR_FAIL;
@@ -1000,19 +1002,25 @@ public:
 #ifdef _WIN32
         //fprintf(stderr, "Read(%08x, %d)\n", buf, count);
 
-        if (m_hFile == INVALID_HANDLE_VALUE || m_mode==LVOM_WRITE || m_mode==LVOM_APPEND )
+        if (m_hFile == INVALID_HANDLE_VALUE || m_mode==LVOM_WRITE ) // || m_mode==LVOM_APPEND
             return LVERR_FAIL;
         //
+		if ( m_pos > m_size )
+			return LVERR_FAIL; // EOF
+
         lUInt32 dwBytesRead = 0;
         if (ReadFile( m_hFile, buf, (lUInt32)count, &dwBytesRead, NULL )) {
             if (nBytesRead)
                 *nBytesRead = dwBytesRead;
             m_pos += dwBytesRead;
+	        return LVERR_OK;
         } else {
+			DWORD err = GetLastError();
+			if (nBytesRead)
+				*nBytesRead = 0;
             return LVERR_FAIL;
         }
 
-        return LVERR_OK;
 #else
         if (m_fd == -1)
             return LVERR_FAIL;
@@ -1034,7 +1042,7 @@ public:
         if (m_hFile == INVALID_HANDLE_VALUE || !pSize)
             return LVERR_FAIL;
 #else
-        if (m_fd == -1)
+        if (m_fd == -1 || !pSize)
             return LVERR_FAIL;
 #endif
         if (m_size<m_pos)
@@ -1093,11 +1101,14 @@ public:
             if (nBytesWritten)
                 *nBytesWritten = dwBytesWritten;
             m_pos += dwBytesWritten;
-        } else {
-            return LVERR_FAIL;
+            if ( m_size < m_pos )
+                m_size = m_pos;
+	        return LVERR_OK;
         }
+        if (nBytesWritten)
+            *nBytesWritten = 0;
+        return LVERR_FAIL;
 
-        return LVERR_OK;
 #else
         if (m_fd == -1)
             return LVERR_FAIL;
@@ -1110,6 +1121,8 @@ public:
                 m_size = m_pos;
             return LVERR_OK;
         }
+        if (nBytesWritten)
+            *nBytesWritten = 0;
         return LVERR_FAIL;
 #endif
     }
@@ -1135,12 +1148,12 @@ public:
         }
 
         pos_low = SetFilePointer(m_hFile, pos_low, &pos_high, m );
-        if (pos_low == 0xFFFFFFFF) {
-            lUInt32 err = GetLastError();
-            if (err == ERROR_NOACCESS)
-                pos_low = (lUInt32)offset;
-            else if ( err != ERROR_SUCCESS)
-                return LVERR_FAIL;
+		lUInt32 err;
+        if (pos_low == INVALID_SET_FILE_POINTER && (err = GetLastError())!=ERROR_SUCCESS ) {
+            //if (err == ERROR_NOACCESS)
+            //    pos_low = (lUInt32)offset;
+            //else if ( err != ERROR_SUCCESS)
+            return LVERR_FAIL;
         }
         m_pos = pos_low
 #if LVLONG_FILE_SUPPORT
@@ -1230,8 +1243,8 @@ public:
             c |= CREATE_ALWAYS;
             break;
         case LVOM_APPEND:
-            m |= GENERIC_WRITE;
-            s |= FILE_SHARE_WRITE;
+            m |= GENERIC_WRITE|GENERIC_READ;
+            s |= FILE_SHARE_WRITE|FILE_SHARE_READ;
             c |= OPEN_ALWAYS;
             break;
         case LVOM_CLOSED:
@@ -4062,14 +4075,14 @@ lString16 LVCombinePaths( lString16 basePath, lString16 newPath )
     if ( newPath[0]=='/' || newPath[0]=='\\' || (newPath.length()>0 && newPath[1]==':' && newPath[2]=='\\') )
         return newPath; // absolute path
     lChar16 separator = 0;
-    for ( int i=0; i<basePath.length(); i++ ) {
+    for ( unsigned i=0; i<basePath.length(); i++ ) {
         if ( basePath[i]=='/' || basePath[i]=='\\' ) {
             separator = basePath[i];
             break;
         }
     }
     if ( separator == 0 )
-        for ( int i=0; i<newPath.length(); i++ ) {
+        for ( unsigned i=0; i<newPath.length(); i++ ) {
             if ( newPath[i]=='/' || newPath[i]=='\\' ) {
                 separator = newPath[i];
                 break;
@@ -4315,11 +4328,11 @@ class LVBlockWriteStream : public LVNamedStream
 #if TRACE_BLOCK_WRITE_STREAM
             CRLog::trace("block %x save %x, %x", (int)block_start, (int)pos, (int)len);
 #endif
-            int offset = (int)(pos - block_start);
-            if ( offset>size || offset<0 || len > size || offset+len > size ) {
+            lvpos_t offset = (int)(pos - block_start);
+            if ( offset>(lvpos_t)size || offset<0 || len > (lvpos_t)size || offset+len > (lvpos_t)size ) {
                 CRLog::error("Unaligned access to block %x", (int)block_start);
             }
-            for ( int i=0; i<len; i++ ) {
+            for ( unsigned i=0; i<len; i++ ) {
                 lUInt8 ch1 = buf[offset+i];
                 lUInt8 ch2 = ptr[i];
                 if ( pos+i>block_end || ch1!=ch2 ) {
@@ -4607,6 +4620,11 @@ public:
         // slice by block bounds
         lvsize_t bytesRead = 0;
         lverror_t res = LVERR_OK;
+		if ( _pos > _size ) {
+			if ( nBytesRead )
+				*nBytesRead = bytesRead;
+			return LVERR_FAIL;
+		}
         if ( _pos + count > _size )
             count = (int)(_size - _pos);
         while ( (int)count>0 && res==LVERR_OK ) {

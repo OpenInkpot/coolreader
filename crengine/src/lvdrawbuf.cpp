@@ -34,12 +34,12 @@ static lUInt32 rgbToGray( lUInt32 color )
     return ((r + g + g + b)>>2) & 0xFF;
 }
 
-static lUInt32 rgbToGray( lUInt32 color, int bpp )
+static lUInt8 rgbToGray( lUInt32 color, int bpp )
 {
     lUInt32 r = (0xFF0000 & color) >> 16;
     lUInt32 g = (0x00FF00 & color) >> 8;
     lUInt32 b = (0x0000FF & color) >> 0;
-    return ((r + g + g + b)>>2) & (((1<<bpp)-1)<<(8-bpp));
+    return (lUInt8)(((r + g + g + b)>>2) & (((1<<bpp)-1)<<(8-bpp)));
 }
 
 static lUInt8 rgbToGrayMask( lUInt32 color, int bpp )
@@ -407,21 +407,32 @@ public:
                     lUInt32 alpha = (cl >> 24)&0xFF;
                     if ( xx<clip.left || xx>=clip.right || alpha==0xFF )
                         continue;
+                    if ( alpha ) {
+                        lUInt32 origColor = row[x];
+                        if ( bpp==3 ) {
+                            origColor = origColor & 0xE0;
+                            origColor = origColor | (origColor>>3) | (origColor>>6);
+                        } else {
+                            origColor = origColor & 0xF0;
+                            origColor = origColor | (origColor>>4);
+                        }
+                        origColor = origColor | (origColor<<8) | (origColor<<16);
+                        ApplyAlphaRGB( origColor, cl, alpha );
+                        cl = origColor;
+                    }
+
                     lUInt8 dcl;
                     if ( dither ) {
 #if (GRAY_INVERSE==1)
-                        dcl = DitherNBitColor( cl^0xFFFFFF, x, yy, bpp );
+                        dcl = (lUInt8)DitherNBitColor( cl^0xFFFFFF, x, yy, bpp );
 #else
-                        dcl = DitherNBitColor( cl, x, yy, bpp );
+                        dcl = (lUInt8)DitherNBitColor( cl, x, yy, bpp );
 #endif
                     } else {
                         dcl = rgbToGray( cl, bpp );
                     }
-                    // TODO: implement alpha
-                    if ( !alpha )
-                        row[ x ] = dcl;
-                    else
-                        ApplyAlphaGray( row[x], dcl, alpha, bpp );
+                    row[ x ] = dcl;
+                    // ApplyAlphaGray( row[x], dcl, alpha, bpp );
                 }
             }
             else if ( bpp == 2 )
@@ -434,8 +445,20 @@ public:
                     lUInt32 cl = data[xmap ? xmap[x] : x];
                     int xx = x + dst_x;
                     lUInt32 alpha = (cl >> 24)&0xFF;
-                    if ( xx<clip.left || xx>=clip.right || alpha&0x80 )
+                    if ( xx<clip.left || xx>=clip.right || alpha==0xFF )
                         continue;
+
+                    int byteindex = (xx >> 2);
+                    int bitindex = (3-(xx & 3))<<1;
+                    lUInt8 mask = 0xC0 >> (6 - bitindex);
+
+                    if ( alpha ) {
+                        lUInt32 origColor = (row[ byteindex ] & mask)>>bitindex;
+                        origColor = origColor | (origColor>>2) | (origColor>>4) | (origColor>>6);
+                        ApplyAlphaRGB( origColor, cl, alpha );
+                        cl = origColor;
+                    }
+
                     lUInt32 dcl = 0;
                     if ( dither ) {
 #if (GRAY_INVERSE==1)
@@ -446,9 +469,6 @@ public:
                     } else {
                         dcl = rgbToGrayMask( cl, 2 ) & 3;
                     }
-                    int byteindex = (xx >> 2);
-                    int bitindex = (3-(xx & 3))<<1;
-                    lUInt8 mask = 0xC0 >> (6 - bitindex);
                     dcl = dcl << bitindex;
                     row[ byteindex ] = (lUInt8)((row[ byteindex ] & (~mask)) | dcl);
                 }
@@ -553,7 +573,7 @@ void LVGrayDrawBuf::Clear( lUInt32 color )
     SetClipRect( NULL );
 }
 
-void LVGrayDrawBuf::FillRect( int x0, int y0, int x1, int y1, lUInt32 color )
+void LVGrayDrawBuf::FillRect( int x0, int y0, int x1, int y1, lUInt32 color32 )
 {
     if (x0<_clip.left)
         x0 = _clip.left;
@@ -565,7 +585,7 @@ void LVGrayDrawBuf::FillRect( int x0, int y0, int x1, int y1, lUInt32 color )
         y1 = _clip.bottom;
     if (x0>=x1 || y0>=y1)
         return;
-    color = rgbToGrayMask( color, _bpp );
+    lUInt8 color = rgbToGrayMask( color32, _bpp );
 #if (GRAY_INVERSE==1)
     color ^= 0xFF;
 #endif
@@ -594,7 +614,7 @@ void LVGrayDrawBuf::FillRect( int x0, int y0, int x1, int y1, lUInt32 color )
     }
 }
 
-void LVGrayDrawBuf::FillRectPattern( int x0, int y0, int x1, int y1, lUInt32 color0, lUInt32 color1, lUInt8 * pattern )
+void LVGrayDrawBuf::FillRectPattern( int x0, int y0, int x1, int y1, lUInt32 color032, lUInt32 color132, lUInt8 * pattern )
 {
     if (x0<_clip.left)
         x0 = _clip.left;
@@ -606,8 +626,8 @@ void LVGrayDrawBuf::FillRectPattern( int x0, int y0, int x1, int y1, lUInt32 col
         y1 = _clip.bottom;
     if (x0>=x1 || y0>=y1)
         return;
-    color0 = rgbToGrayMask( color0, _bpp );
-    color1 = rgbToGrayMask( color1, _bpp );
+    lUInt8 color0 = rgbToGrayMask( color032, _bpp );
+    lUInt8 color1 = rgbToGrayMask( color132, _bpp );
     lUInt8 * line = GetScanLine(y0);
     for (int y=y0; y<y1; y++)
     {
@@ -1333,7 +1353,7 @@ void LVColorDrawBuf::DrawTo( LVDrawBuf * buf, int x, int y, int options, lUInt32
                     if ( x+xx >= clip.left && x+xx < clip.right )
                     {
                         //lUInt8 mask = ~((lUInt8)0xC0>>shift);
-                        *dst = *src;
+                        *dst = (lUInt8)*src;
                     }
                     dst++;
                     src++;

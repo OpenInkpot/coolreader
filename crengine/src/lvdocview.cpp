@@ -1578,6 +1578,20 @@ int LVDocView::getPageCount()
 // Navigation code
 //============================================================================
 
+/// get position of view inside document
+void LVDocView::GetPos( lvRect & rc )
+{
+    rc.left = 0;
+    rc.right = GetWidth();
+    if ( isPageMode() && _page>=0 && _page<m_pages.length() ) {
+        rc.top = m_pages[_page]->start;
+        rc.bottom = rc.top + m_pages[_page]->height;
+    } else {
+        rc.top = _pos;
+        rc.bottom = _pos + GetHeight();
+    }
+}
+
 /// get vertical position of view inside document
 int LVDocView::GetPos()
 {
@@ -3188,11 +3202,11 @@ bool LVDocView::ParseDocument( )
 		    // set stylesheet
             m_doc->setStyleSheet( m_stylesheet.c_str(), true );
 
-            lString16 docstyle = m_doc->createXPointer(L"/FictionBook/stylesheet").getText();
-            if ( !docstyle.empty() && m_doc->getDocFlag(DOC_FLAG_ENABLE_INTERNAL_STYLES) ) {
-                //m_doc->getStyleSheet()->parse(UnicodeToUtf8(docstyle).c_str());
-                m_doc->setStyleSheet( UnicodeToUtf8(docstyle).c_str(), false );
-            }
+//            lString16 docstyle = m_doc->createXPointer(L"/FictionBook/stylesheet").getText();
+//            if ( !docstyle.empty() && m_doc->getDocFlag(DOC_FLAG_ENABLE_INTERNAL_STYLES) ) {
+//                //m_doc->getStyleSheet()->parse(UnicodeToUtf8(docstyle).c_str());
+//                m_doc->setStyleSheet( UnicodeToUtf8(docstyle).c_str(), false );
+//            }
 
             m_showCover = !getCoverPageImage().isNull();
 
@@ -3315,11 +3329,11 @@ bool LVDocView::ParseDocument( )
             }
         }
 
-        lString16 docstyle = m_doc->createXPointer(L"/FictionBook/stylesheet").getText();
-        if ( !docstyle.empty() && m_doc->getDocFlag(DOC_FLAG_ENABLE_INTERNAL_STYLES) ) {
-            //m_doc->getStyleSheet()->parse(UnicodeToUtf8(docstyle).c_str());
-            m_doc->setStyleSheet( UnicodeToUtf8(docstyle).c_str(), false );
-        }
+//        lString16 docstyle = m_doc->createXPointer(L"/FictionBook/stylesheet").getText();
+//        if ( !docstyle.empty() && m_doc->getDocFlag(DOC_FLAG_ENABLE_INTERNAL_STYLES) ) {
+//            //m_doc->getStyleSheet()->parse(UnicodeToUtf8(docstyle).c_str());
+//            m_doc->setStyleSheet( UnicodeToUtf8(docstyle).c_str(), false );
+//        }
 
     #if 0 //def _DEBUG
             LVStreamRef ostream = LVOpenFileStream( "test_save_source.xml", LVOM_WRITE );
@@ -4281,7 +4295,25 @@ void LVDocView::propsUpdateDefaults( CRPropRef props )
     props->setIntDef( PROP_AUTOSAVE_BOOKMARKS, 1 );
     props->setIntDef( PROP_DISPLAY_FULL_UPDATE_INTERVAL, 1 );
     props->setIntDef( PROP_DISPLAY_TURBO_UPDATE_MODE, 0 );
-    lString8 defFontFace(DEFAULT_FONT_NAME);
+
+    lString8 defFontFace;
+    static const char * goodFonts[] = {
+         "DejaVu Sans",
+         "FreeSans",
+         "Liberation Sans",
+         "Arial",
+         "Verdana",
+         NULL
+    };
+    for ( int i=0; goodFonts[i]; i++ ) {
+         if ( list.contains(lString16(goodFonts[i])) ) {
+             defFontFace = lString8(goodFonts[i]);
+             break;
+         }
+    }
+    if ( defFontFace.empty() )
+        defFontFace = UnicodeToUtf8(list[0]);
+
     lString8 defStatusFontFace(DEFAULT_STATUS_FONT_NAME);
     props->setStringDef( PROP_FONT_FACE, defFontFace.c_str() );
     props->setStringDef( PROP_STATUS_FONT_FACE, defStatusFontFace.c_str() );
