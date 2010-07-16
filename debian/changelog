@@ -1,3 +1,15 @@
+cr3 (3.0.34-1.bradbury.1) bradbury; urgency=low
+
+  [ Vadim Lopatin ]
+  * change key mapping according to screen orientation -- N516
+  * arrow keys remapping according to screen orientation, V3/Openinkpot
+  * Jinke/Nano-X code cleanup
+  * fix footnotes bugs
+  * update version
+  * add history and custom-info to About/FileInfo
+
+ -- Alexander Kerner <lunohod@openinkpot.org>  Fri, 16 Jul 2010 15:39:06 +0200
+
 cr3 (3.0.24-27.bradbury.1) bradbury; urgency=low
 
   * backport recent changes
