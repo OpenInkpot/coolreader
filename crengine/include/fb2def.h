@@ -60,7 +60,7 @@ XS_TAG1T( dt )
 XS_TAG1T( dd )
 XS_TAG1( ol )
 XS_TAG1( ul )
-XS_TAG1T( li )
+XS_TAG1D( li, true, css_d_list_item, css_ws_inherit )
 XS_TAG1T( h1 )
 XS_TAG1T( h2 )
 XS_TAG1T( h3 )
@@ -187,6 +187,9 @@ XS_ATTR( include )
 XS_ATTR2( include_all, "include-all" )
 XS_ATTR2( content_type, "content-type" )
 XS_ATTR( StyleSheet )
+XS_ATTR( title )
+XS_ATTR( subtitle )
+XS_ATTR( suptitle )
 
 XS_END_ATTRS
 

@@ -50,6 +50,8 @@ typedef struct css_style_rec_tag {
     css_page_break_t     page_break_after;
     css_page_break_t     page_break_inside;
     css_hyphenate_t        hyphenate;
+    css_list_style_type_t list_style_type;
+    css_list_style_position_t list_style_position;
     css_style_rec_tag()
     : refCount(0)
     , display( css_d_inherit )
@@ -72,6 +74,8 @@ typedef struct css_style_rec_tag {
     , page_break_after(css_pb_inherit)
     , page_break_inside(css_pb_inherit)
     , hyphenate(css_hyph_inherit)
+    , list_style_type(css_lst_inherit)
+    , list_style_position(css_lsp_inherit)
     {
     }
     void AddRef() { refCount++; }
@@ -107,6 +111,7 @@ enum lvdom_element_render_method
     erm_final,         ///< final element: render the whole it's content as single render block
     erm_inline,        ///< inline element
     erm_mixed,         ///< block and inline elements are mixed: autobox inline portions of nodes; TODO
+    erm_list_item,     ///< render as block element as list item
     erm_table,         ///< table element: render as table
     erm_table_row_group, ///< table row group
     erm_table_header_group, ///< table header group

@@ -2814,6 +2814,7 @@ ldomDocument::ldomDocument()
 , _page_height(0)
 , _page_width(0)
 , _rendered(false)
+, lists(100)
 {
     allocTinyElement(NULL, 0, 0);
     //new ldomElement( this, NULL, 0, 0, 0 );
@@ -2851,6 +2852,7 @@ ldomDocument::ldomDocument( ldomDocument & doc )
 , _page_width(doc._page_width)
 , _container(doc._container)
 , m_toc(this)
+, lists(100)
 {
 }
 
@@ -2989,6 +2991,8 @@ bool ldomDocument::setRenderProps( int width, int dy, bool showCover, int y0, fo
     s->page_break_before = css_pb_auto;
     s->page_break_after = css_pb_auto;
     s->page_break_inside = css_pb_auto;
+    s->list_style_type = css_lst_disc;
+    s->list_style_position = css_lsp_outside;
     s->vertical_align = css_va_baseline;
     s->font_family = def_font->getFontFamily();
     s->font_size.type = css_val_px;
@@ -3046,6 +3050,7 @@ void tinyNodeCollection::dropStyles()
 {
     _styles.clear(-1);
     _fonts.clear(-1);
+    resetNodeNumberingProps();
     int cnt = 0;
     int count = ((_elemCount+TNC_PART_LEN-1) >> TNC_PART_SHIFT);
     for ( int i=0; i<count; i++ ) {
@@ -3096,9 +3101,13 @@ void ldomDocument::applyDocumentStyleSheet()
     if ( !ss.isNull() ) {
         lString16 css = ss.getText('\n');
         if ( !css.empty() ) {
-            CRLog::debug("Using internal FB2 document stylesheet:\n%s", LCSTR(css));
+            CRLog::debug("applyDocumentStyleSheet() : Using internal FB2 document stylesheet:\n%s", LCSTR(css));
             _stylesheet.parse(LCSTR(css));
+        } else {
+            CRLog::trace("applyDocumentStyleSheet() : stylesheet under /FictionBook/stylesheet is empty");
         }
+    } else {
+        CRLog::trace("applyDocumentStyleSheet() : No internal FB2 stylesheet found under /FictionBook/stylesheet");
     }
 }
 
@@ -3747,6 +3756,7 @@ void ldomNode::initNodeRendMethod()
 //    }
 
     int d = getStyle()->display;
+
     if ( hasInvisibleParent(this) ) {
         // invisible
         //recurseElements( resetRendMethodToInvisible );
@@ -3760,6 +3770,9 @@ void ldomNode::initNodeRendMethod()
         //CRLog::trace("switch all children elements of <%s> to inline", LCSTR(getNodeName()));
         recurseElements( resetRendMethodToInline );
         setRendMethod(erm_runin);
+    } else if ( d==css_d_list_item ) {
+        // list item
+        setRendMethod(erm_list_item);
     } else if (d == css_d_table) {
         // table
         initTableRendMethods( this, 0 );
@@ -4044,10 +4057,14 @@ void ldomDocumentWriter::OnTagClose( const lChar16 *, const lChar16 * tagname )
         _parser->Stop();
     }
 
-    if ( !_popStyleOnFinish && !lStr_cmp(tagname, L"stylesheet") ) {
-        _document->getStyleSheet()->push();
-        _popStyleOnFinish = true;
-        _document->applyDocumentStyleSheet();
+    if ( !lStr_cmp(tagname, L"stylesheet") ) {
+        //CRLog::trace("</stylesheet> found");
+        if ( !_popStyleOnFinish ) {
+            //CRLog::trace("saving current stylesheet before applying of document stylesheet");
+            _document->getStyleSheet()->push();
+            _popStyleOnFinish = true;
+            _document->applyDocumentStyleSheet();
+        }
     }
     //logfile << " !c!\n";
 }
@@ -4081,7 +4098,7 @@ void ldomDocumentWriter::OnEncoding( const lChar16 *, const lChar16 *)
 }
 
 ldomDocumentWriter::ldomDocumentWriter(ldomDocument * document, bool headerOnly)
-    : _document(document), _currNode(NULL), _errFlag(false), _headerOnly(headerOnly), _flags(0)
+    : _document(document), _currNode(NULL), _errFlag(false), _headerOnly(headerOnly), _popStyleOnFinish(false), _flags(0)
 {
     _stopTagId = 0xFFFE;
     IS_FIRST_BODY = true;
@@ -4540,6 +4557,8 @@ ldomXPointer ldomDocument::createXPointer( lvPoint pt, int direction )
                 //CRLog::debug(" word found [%d]: x=%d..%d, start=%d, len=%d  %08X", w, word->x, word->x + word->width, word->t.start, word->t.len, src->object);
                 // found word, searching for letters
                 ldomNode * node = (ldomNode *)src->object;
+                if ( !node )
+                    continue;
                 if ( src->flags & LTEXT_SRC_IS_OBJECT ) {
                     // object (image)
                     return ldomXPointer( node->getParentNode(),
@@ -6814,6 +6833,21 @@ bool ldomDocument::DocFileHeader::deserialize( SerialBuf & hdrbuf )
 }
 #endif
 
+void tinyNodeCollection::setDocFlag( lUInt32 mask, bool value )
+{
+    CRLog::debug("setDocFlag(%04x, %s)", mask, value?"true":"false");
+    if ( value )
+        _docFlags |= mask;
+    else
+        _docFlags &= ~mask;
+}
+
+void tinyNodeCollection::setDocFlags( lUInt32 value )
+{
+    CRLog::debug("setDocFlags(%04x)", value);
+    _docFlags = value;
+}
+
 int tinyNodeCollection::getPersistenceFlags()
 {
     int format = getProps()->getIntDef(DOC_PROP_FILE_FORMAT, 0);
@@ -8888,6 +8922,102 @@ void ldomNode::initNodeStyle()
     }
 }
 
+/// for display:list-item node, get marker
+bool ldomNode::getNodeListMarker( int & counterValue, lString16 & marker, int & markerWidth )
+{
+    css_style_ref_t s = getStyle();
+    marker.clear();
+    markerWidth = 0;
+    if ( s.isNull() )
+        return false;
+    css_list_style_type_t st = s->list_style_type;
+    switch ( st ) {
+    case css_lst_disc:
+        marker = L"\x25CF";
+        break;
+    case css_lst_circle:
+        marker = L"\x25CB";
+        break;
+    case css_lst_square:
+        marker = L"\x25A0";
+        break;
+    case css_lst_decimal:
+    case css_lst_lower_roman:
+    case css_lst_upper_roman:
+    case css_lst_lower_alpha:
+    case css_lst_upper_alpha:
+        if ( counterValue<=0 ) {
+            // calculate counter
+            ldomNode * parent = getParentNode();
+            counterValue = 0;
+            for ( int i=0; i<parent->getChildCount(); i++ ) {
+                ldomNode * child = parent->getChildNode(i);
+                css_style_ref_t cs = child->getStyle();
+                if ( cs.isNull() )
+                    continue;
+                switch ( cs->list_style_type ) {
+                case css_lst_decimal:
+                case css_lst_lower_roman:
+                case css_lst_upper_roman:
+                case css_lst_lower_alpha:
+                case css_lst_upper_alpha:
+                    counterValue++;
+                    break;
+                }
+                if ( child==this )
+                    break;
+            }
+        } else {
+            counterValue++;
+        }
+        static const char * lower_roman[] = {"i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix",
+                                             "x", "xi", "xii", "xiii", "xiv", "xv", "xvi", "xvii", "xviii", "xix",
+                                         "xx", "xxi", "xxii", "xxiii"};
+        if ( counterValue>0 ) {
+            switch (st) {
+            case css_lst_decimal:
+                marker = lString16::itoa(counterValue);
+                break;
+            case css_lst_lower_roman:
+                if ( counterValue-1<sizeof(lower_roman)/sizeof(lower_roman[0]) )
+                    marker = lString16(lower_roman[counterValue-1]);
+                else
+                    marker = lString16::itoa(counterValue); // fallback to simple counter
+                break;
+            case css_lst_upper_roman:
+                if ( counterValue-1<sizeof(lower_roman)/sizeof(lower_roman[0]) )
+                    marker = lString16(lower_roman[counterValue-1]);
+                else
+                    marker = lString16::itoa(counterValue); // fallback to simple digital counter
+                marker.uppercase();
+                break;
+            case css_lst_lower_alpha:
+                if ( counterValue<=26 )
+                    marker.append(1, 'a' + counterValue-1);
+                else
+                    marker = lString16::itoa(counterValue); // fallback to simple digital counter
+                break;
+            case css_lst_upper_alpha:
+                if ( counterValue<=26 )
+                    marker.append(1, 'A' + counterValue-1);
+                else
+                    marker = lString16::itoa(counterValue); // fallback to simple digital counter
+                break;
+            }
+        }
+        break;
+    }
+    if ( !marker.empty() ) {
+        LVFont * font = getFont().get();
+        if ( font ) {
+            markerWidth = font->getTextWidth((marker + L"  ").c_str(), marker.length()+2) + s->font_size.value/8;
+        } else {
+            marker.clear();
+        }
+    }
+}
+
+
 /// returns first child node
 ldomNode * ldomNode::getFirstChild() const
 {
@@ -9269,6 +9399,21 @@ LVImageSourceRef ldomDocument::getObjectImageSource( lString16 refName )
     return ref;
 }
 
+void ldomDocument::resetNodeNumberingProps()
+{
+    lists.clear();
+}
+
+ListNumberingPropsRef ldomDocument::getNodeNumberingProps( lUInt32 nodeDataIndex )
+{
+    return lists.get(nodeDataIndex);
+}
+
+void ldomDocument::setNodeNumberingProps( lUInt32 nodeDataIndex, ListNumberingPropsRef v )
+{
+    lists.set(nodeDataIndex, v);
+}
+
 /// formats final block
 int ldomNode::renderFinalBlock(  LFormattedTextRef & frmtext, RenderRectAccessor * fmt, int width )
 {
@@ -9278,16 +9423,17 @@ int ldomNode::renderFinalBlock(  LFormattedTextRef & frmtext, RenderRectAccessor
     //CRLog::trace("renderFinalBlock()");
     CVRendBlockCache & cache = getDocument()->getRendBlockCache();
     LFormattedTextRef f;
+    lvdom_element_render_method rm = getRendMethod();
     if ( cache.get( this, f ) ) {
         frmtext = f;
-        if ( getRendMethod() != erm_final )
+        if ( rm != erm_final && rm != erm_list_item && rm != erm_table_caption )
             return 0;
         //RenderRectAccessor fmt( this );
         //CRLog::trace("Found existing formatted object for node #%08X", (lUInt32)this);
         return fmt->getHeight();
     }
     f = new LFormattedText();
-    if ( (getRendMethod() != erm_final && getRendMethod() != erm_table_caption) )
+    if ( (rm != erm_final && rm != erm_list_item && rm != erm_table_caption) )
         return 0;
     //RenderRectAccessor fmt( this );
     /// render whole node content as single formatted object

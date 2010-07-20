@@ -371,7 +371,10 @@ lUInt32 lvtextFormat( formatted_text_fragment_t * pbuffer )
                 int line_x;
                 if ( wrapNextLine ) {
                     curr_x = 0;
-                    line_x = isParaStart ? srcline->margin : 0;
+                    if ( srcline->margin<0 )
+                        line_x = isParaStart ? 0 : -srcline->margin;
+                    else
+                        line_x = isParaStart ? srcline->margin : 0;
                 } else {
                     line_x = (frmline?frmline->x:0);
                 }
@@ -407,7 +410,10 @@ lUInt32 lvtextFormat( formatted_text_fragment_t * pbuffer )
                             frmline = lvtextAddFormattedLine( pbuffer );
                         }
                         curr_x = 0;
-                        frmline->x = isParaStart ? srcline->margin : 0;
+                        if ( srcline->margin<0 )
+                            frmline->x = isParaStart ? 0 : -srcline->margin;
+                        else
+                            frmline->x = isParaStart ? srcline->margin : 0;
                         space_left = pbuffer->width - curr_x - frmline->x;
                         if ( chars_left && textWrapped )
                         {
@@ -816,6 +822,9 @@ public:
             }
             frmline->word_count = wordCount;
             frmline->width = 0;
+            if ( srcline && srcline->margin<0 ) { //LVE???
+                frmline->x = -srcline->margin;
+            }
             int i;
             for ( i=0; i<wordCount; i++ ) {
                 formatted_word_t * word = &frmline->words[i];
@@ -905,6 +914,8 @@ public:
 
             if ( createNewLine ) {
                 newline->y = frmline->y + frmline->height;
+                if ( first_para_line->margin<0 )
+                    newline->x = -first_para_line->margin;
             }
             // go to new line
             frmline = newline;
@@ -921,7 +932,7 @@ public:
         //
         if ( frmline->word_count == 0 ) {
             // set margin
-            frmline->x = first_para_line->margin;
+            frmline->x = first_para_line->margin>0?first_para_line->margin:0;
         }
     }
 
@@ -1067,10 +1078,21 @@ public:
             flags |= LTEXT_WORD_CAN_BREAK_LINE_AFTER;
         }
         bool visualAlignmentEnabled = true;
-        if (lastchar & LCHAR_IS_SPACE) {
+        if ( lastc=='\t' ) {
+            // tab
+            if ( frmline->word_count==1 && frmline->x==0 && first_para_line->margin<0 ) {
+                if ( word->width<-first_para_line->margin ) {
+                    word->width = -first_para_line->margin;
+                    word->inline_width = -first_para_line->margin;
+                }
+            }
+            if ( word->t.len>0 )
+                word->t.len--;
+        } else if (lastchar & LCHAR_IS_SPACE) {
             flags |= LTEXT_WORD_CAN_ADD_SPACE_AFTER;
-            if ( firstch<lastch )
+            if ( firstch<lastch ) {
                 word->width = widths_buf[lastch-1] - wpos;
+            }
             if ( lastch>firstch )
                 lastc = srcline->t.text[text_offset+lastch-1];
         }
@@ -1101,18 +1123,18 @@ public:
         int scale_mul = 1;
         int div_x = (srcline->o.width / m_pbuffer->width) + 1;
         int div_y = (srcline->o.height / m_pbuffer->page_height) + 1;
-#if (MAX_IMAGE_SCALE_MUL==3)
-        if ( srcline->o.height*3 < m_pbuffer->page_height-20
-                && srcline->o.width*3 < m_pbuffer->width - 20 )
-            scale_mul = 3;
-        else
-#endif
-#if (MAX_IMAGE_SCALE_MUL==2) || (MAX_IMAGE_SCALE_MUL==3)
-            if ( srcline->o.height*2 < m_pbuffer->page_height-20
-                && srcline->o.width*2 < m_pbuffer->width - 20 )
-            scale_mul = 2;
-        else
-#endif
+//#if (MAX_IMAGE_SCALE_MUL==3)
+//        if ( srcline->o.height*3 < m_pbuffer->page_height-20
+//                && srcline->o.width*3 < m_pbuffer->width - 20 )
+//            scale_mul = 3;
+//        else
+//#endif
+//#if (MAX_IMAGE_SCALE_MUL==2) || (MAX_IMAGE_SCALE_MUL==3)
+//            if ( srcline->o.height*2 < m_pbuffer->page_height-20
+//                && srcline->o.width*2 < m_pbuffer->width - 20 )
+//            scale_mul = 2;
+//        else
+//#endif
         if (div_x>1 || div_y>1) {
             if (div_x>div_y)
                 scale_div = div_x;
@@ -1121,8 +1143,11 @@ public:
         }
         word->o.height = srcline->o.height * scale_mul / scale_div;
         word->width = srcline->o.width * scale_mul / scale_div;
+        word->inline_width = srcline->o.width * scale_mul / scale_div;
         word->flags |= LTEXT_WORD_IS_OBJECT;
         word->flags |= LTEXT_WORD_CAN_BREAK_LINE_AFTER;
+        if ( srcIndex==m_pbuffer->srctextlen-1 || (m_pbuffer->srctext[srcIndex+1].flags&LTEXT_FLAG_NEWLINE) )
+            word->flags |= LTEXT_WORD_MUST_BREAK_LINE_AFTER;
         word->y = 0;
 
         frmline->width += word->width;
@@ -1148,12 +1173,15 @@ public:
         while ( srcline ) { //&& srcIndex < (int)m_pbuffer->srctextlen
             if ( flgObject ) {
                 // try to insert object
-                addObject();
+                formatted_word_t * w = addObject();
                 int space_left = spaceLeft();
-                if ( space_left<=0 )
+                if ( space_left<=0 ) {
                     commit( frmline->word_count-1 );
-                else
+                } else if ( w->flags & LTEXT_WORD_MUST_BREAK_LINE_AFTER ) {
+                    commit();
+                } else {
                     setSrcLine( srcIndex+1, 0 );
+                }
             } else {
                 // try to insert text
                 int space_left = spaceLeft();
