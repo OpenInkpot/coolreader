@@ -9,7 +9,7 @@ Standards-Version: 3.6.2
 
 Package: cr3
 Architecture: any
-Depends: ${shlibs:Depends}, cr3-settings
+Depends: ${shlibs:Depends}, cr3-settings, madshelf-positions-cr3
 Description: e-book reader
  CoolReader3 is an e-book reader.
  .
