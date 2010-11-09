@@ -1,3 +1,9 @@
+cr3 (3.0.35-4) zelazny; urgency=low
+
+  * Add depend on madshelf-positions-cr3
+
+ -- Alexander V. Nikolaev <avn@daemon.hole.ru>  Wed, 10 Nov 2010 01:12:39 +0200
+
 cr3 (3.0.35-3) zelazny; urgency=low
 
   * Typo in bookmark xml markup
