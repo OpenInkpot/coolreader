@@ -1,3 +1,14 @@
+cr3 (3.0.43-2) zelazny; urgency=low
+
+  [ Vadim Lopatin ]
+  * CSS support fixes
+  * EPUB, CHM, HTML support fixes
+
+  [ Alexander Kerner ]
+  * Merge with upstream
+
+ -- Alexander Kerner <lunohod@openinkpot.org>  Mon, 31 Jan 2011 14:50:58 +0100
+
 cr3 (3.0.35-4) zelazny; urgency=low
 
   * Add depend on madshelf-positions-cr3
