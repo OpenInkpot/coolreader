@@ -76,9 +76,38 @@ ENDIF(LANGUAGE_TS_FILES)
 
 INCLUDE_DIRECTORIES( ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_BINARY_DIR}/cr3qt )
 
-ADD_EXECUTABLE(cr3 ${CR3_SOURCES} ${CR3_RCS} ${CR3_UI_HDRS} ${CR3_MOC_SRCS} ${QM_FILES})
+IF (UNIX)
+FIND_PROGRAM(GZIP_TOOL
+  NAMES gzip
+  PATHS /bin
+    /usr/bin
+    /usr/local/bin
+)
+
+IF(NOT GZIP_TOOL)
+  MESSAGE(FATAL_ERROR "Unable to find 'gzip' program")
+ENDIF(NOT GZIP_TOOL)
+
+SET (man ${CMAKE_CURRENT_SOURCE_DIR}/data/docs/cr3.1)
+SET (man_gz ${CMAKE_BINARY_DIR}/cr3.1.gz)
+
+ADD_CUSTOM_COMMAND(OUTPUT ${man_gz}
+   COMMAND ${GZIP_TOOL} -c ${man} > ${man_gz}
+   DEPENDS ${man}
+   COMMENT "Building ${man_gz}")
+
+SET (CR3_MAN_PAGES ${man_gz})
+
+ELSE()
+SET (CR3_MAN_PAGES)
+
+ENDIF(UNIX)
+
+
+ADD_EXECUTABLE(cr3 ${CR3_MAN_PAGES} ${CR3_SOURCES} ${CR3_RCS} ${CR3_UI_HDRS} ${CR3_MOC_SRCS} ${QM_FILES})
 
 if(WIN32)
+if(CMAKE_GENERATOR MATCHES "Visual Studio*")
 set_target_properties(cr3 PROPERTIES
 LINK_FLAGS_DEBUG "/SUBSYSTEM:CONSOLE")
 set_target_properties(cr3 PROPERTIES
@@ -87,6 +116,7 @@ set_target_properties(cr3 PROPERTIES
 LINK_FLAGS_RELEASE "/SUBSYSTEM:WINDOWS")
 set_target_properties(cr3 PROPERTIES
 MINSIZEREL "/SUBSYSTEM:WINDOWS")
+endif(CMAKE_GENERATOR MATCHES "Visual Studio*")
 endif(WIN32)
 
 
@@ -101,6 +131,11 @@ TARGET_LINK_LIBRARIES(cr3 crengine tinydict ${EXTRA_LIBS})
 
 IF (UNIX)
 
+
+INSTALL(FILES ${man_gz}
+   DESTINATION "share/man/man1"
+   PERMISSIONS OWNER_READ GROUP_READ WORLD_READ)
+
 INSTALL( TARGETS cr3 RUNTIME DESTINATION bin )
 INSTALL( DIRECTORY data/ DESTINATION share/cr3 
    FILES_MATCHING PATTERN "*.css" )
@@ -109,7 +144,12 @@ INSTALL( DIRECTORY data/hyph DESTINATION share/cr3
 INSTALL( DIRECTORY data/hyph DESTINATION share/cr3 
    FILES_MATCHING PATTERN "*.pattern" )
 INSTALL( DIRECTORY data/skins DESTINATION share/cr3/skins )
+INSTALL( DIRECTORY data/textures DESTINATION share/cr3/textures )
+INSTALL( DIRECTORY data/backgrounds DESTINATION share/cr3/backgrounds )
 INSTALL( FILES ${QM_FILES} DESTINATION share/cr3/i18n )
+INSTALL( FILES src/desktop/cr3.desktop DESTINATION share/applications )
+INSTALL( FILES src/desktop/cr3.png DESTINATION share/pixmaps )
+INSTALL( FILES src/desktop/cr3.xpm DESTINATION share/pixmaps )
 
 ELSE()
 

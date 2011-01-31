@@ -857,6 +857,29 @@ const lChar16 * GetCharsetByte2UnicodeTable( int codepage )
     }
 }
 
+const lChar16 * GetCharsetName( int codepage )
+{
+    switch ( codepage )
+    {
+    case 1251:
+        return L"cp1251";
+    case 1257:
+        return L"cp1257";
+    case 204:
+        return L"cp1251";
+    case 1252:
+        return L"cp1252";
+    case 1253:
+        return L"cp1253";
+    case 737:
+        return L"cp737";
+    case 1250: return L"cp1250";
+    case 866:  return L"cp866";
+    case 850:  return L"cp850";
+    default:   return L"cp1252";
+    }
+}
+
 static unsigned char cp1252_page00[256] = {
 	0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, /* 0x00-0x07 */
 	0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, /* 0x08-0x0f */
@@ -1453,7 +1476,7 @@ typedef struct {
 // EXTERNAL DEFINE
 extern cp_stat_t cp_stat_table[];
 
-int AutodetectCodePage( const unsigned char * buf, int buf_size, char * cp_name, char * lang_name )
+int AutodetectCodePageUtf( const unsigned char * buf, int buf_size, char * cp_name, char * lang_name )
 {
     // checking byte order signatures
     if ( buf[0]==0xEF && buf[1]==0xBB && buf[2]==0xBF ) {
@@ -1482,6 +1505,14 @@ int AutodetectCodePage( const unsigned char * buf, int buf_size, char * cp_name,
         strcpy( lang_name, "en" );
         return 1;
     }
+   return 0;
+}
+
+int AutodetectCodePage( const unsigned char * buf, int buf_size, char * cp_name, char * lang_name )
+{
+    int res = AutodetectCodePageUtf( buf, buf_size, cp_name, lang_name );
+    if ( res )
+        return res;
     // use character statistics
    short char_stat[256];
    dbl_char_stat_t dbl_char_stat[DBL_CHAR_STAT_SIZE];

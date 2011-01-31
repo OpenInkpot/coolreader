@@ -607,7 +607,13 @@ public:
 
     virtual lverror_t Seek(lvoffset_t pos, lvseek_origin_t origin, lvpos_t* newPos)
     {
-        lverror_t res = m_stream->Seek( m_start + pos, origin, &m_pos );
+        if ( origin==LVSEEK_SET )
+            pos += m_start;
+        else if ( origin==LVSEEK_END ) {
+            origin = LVSEEK_SET;
+            pos = m_start + m_size;
+        }
+        lverror_t res = m_stream->Seek( pos, origin, &m_pos );
         if (res == LVERR_OK)
             m_pos -= m_start;
         if (newPos)
@@ -623,7 +629,11 @@ public:
     virtual lverror_t Read(void* buf, lvsize_t size, lvsize_t* pBytesRead)
     {
         lvsize_t bytesRead = 0;
-        lverror_t res = m_stream->Read( buf, size, &bytesRead );
+        lvpos_t p;
+        lverror_t res = m_stream->Seek( m_pos+m_start, LVSEEK_SET, &p );
+        if ( res!=LVERR_OK )
+            return res;
+        res = m_stream->Read( buf, size, &bytesRead );
         if (res == LVERR_OK)
             m_pos += bytesRead;
         if (pBytesRead)
@@ -722,7 +732,7 @@ LVStreamRef LVCreateBufferedStream( LVStreamRef stream, int bufSize );
 LVStreamRef LVCreateTCRDecoderStream( LVStreamRef stream );
 
 /// returns path part of pathname (appended with / or \ delimiter)
-lString16 LVExtractPath( lString16 pathName );
+lString16 LVExtractPath( lString16 pathName, bool appendEmptyPath=true );
 /// removes first path part from pathname and returns it
 lString16 LVExtractFirstPathElement( lString16 & pathName );
 /// removes last path part from pathname and returns it
@@ -745,6 +755,9 @@ bool LVIsAbsolutePath( lString16 pathName );
 lString16 LVMakeRelativeFilename( lString16 basePath, lString16 pathName );
 // resolve relative links
 lString16 LVCombinePaths( lString16 basePath, lString16 newPath );
+
+/// tries to split full path name into archive name and file name inside archive using separator "@/" or "@\"
+bool LVSplitArcName( lString16 fullPathName, lString16 & arcPathName, lString16 & arcItemPathName );
 
 /// returns true if specified file exists
 bool LVFileExists( lString16 pathName );

@@ -69,6 +69,7 @@ typedef struct
     lUInt32         color;    /**< \brief color */
     lUInt32         bgcolor;  /**< \brief background color */
     lUInt32         flags;    /**< \brief flags */
+    lUInt16         index;
     // move unions bottom to simplify debugging
     union {
         struct {
@@ -308,5 +309,7 @@ public:
 };
 
 #endif
+
+extern int gFlgFloatingPunctuationEnabled;
 
 #endif

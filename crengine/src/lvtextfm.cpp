@@ -23,6 +23,12 @@
 #include "../include/lvtinydom.h"
 #endif
 
+#define ARBITRARY_IMAGE_SCALE_ENABLED 1
+
+#ifndef MAX_IMAGE_SCALE_MUL
+#define MAX_IMAGE_SCALE_MUL 2
+#endif
+
 #define FRM_ALLOC_SIZE 16
 
 formatted_line_t * lvtextAllocFormattedLine( )
@@ -167,6 +173,7 @@ void lvtextAddSourceLine( formatted_text_fragment_t * pbuffer,
     {
         pline->t.text = text;
     }
+    pline->index = pbuffer->srctextlen-1;
     pline->object = object;
     pline->t.len = (lUInt16)len;
     pline->margin = margin;
@@ -196,6 +203,7 @@ void lvtextAddSourceObject(
         pbuffer->srctext = (src_text_fragment_t*)realloc( pbuffer->srctext, sizeof(src_text_fragment_t)*(srctextsize) );
     }
     src_text_fragment_t * pline = &pbuffer->srctext[ pbuffer->srctextlen++ ];
+    pline->index = pbuffer->srctextlen-1;
     pline->o.width = width;
     pline->o.height = height;
     pline->object = object;
@@ -520,19 +528,28 @@ lUInt32 lvtextFormat( formatted_text_fragment_t * pbuffer )
                 // object
                 word = lvtextAddFormattedWord( frmline );
                 word->src_text_index = i;
+#if ARBITRARY_IMAGE_SCALE_ENABLED==1
+                int pscale_x = 1000 * pbuffer->width / srcline->o.width;
+                int pscale_y = 1000 * pbuffer->height / pbuffer->page_height;
+                int pscale = pscale_x < pscale_y ? pscale_x : pscale_y;
+                if ( pscale>MAX_IMAGE_SCALE_MUL*1000 )
+                    pscale = MAX_IMAGE_SCALE_MUL*1000;
+                word->o.height = srcline->o.height * pscale / 1000;
+                word->width = srcline->o.width * pscale / 1000;
+#else
                 int scale_div = 1;
                 int scale_mul = 1;
                 int div_x = (srcline->o.width / pbuffer->width) + 1;
                 int div_y = (srcline->o.height / pbuffer->page_height) + 1;
 #if (MAX_IMAGE_SCALE_MUL==3)
-                if ( srcline->o.height*3 < pbuffer->page_height-20
-                        && srcline->o.width*3 < pbuffer->width - 20 )
+                if ( srcline->o.height*3 <= pbuffer->page_height
+                        && srcline->o.width*3 <= pbuffer->width )
                     scale_mul = 3;
                 else
 #endif
 #if (MAX_IMAGE_SCALE_MUL==2) || (MAX_IMAGE_SCALE_MUL==3)
-                    if ( srcline->o.height*2 < pbuffer->page_height-20
-                        && srcline->o.width*2 < pbuffer->width - 20 )
+                    if ( srcline->o.height*2 <= pbuffer->page_height
+                        && srcline->o.width*2 <= pbuffer->width )
                     scale_mul = 2;
                 else
 #endif
@@ -544,6 +561,7 @@ lUInt32 lvtextFormat( formatted_text_fragment_t * pbuffer )
                 }
                 word->o.height = srcline->o.height * scale_mul / scale_div;
                 word->width = srcline->o.width * scale_mul / scale_div;
+#endif// ARBITRARY_IMAGE_SCALE_ENABLED==1
                 word->flags = LTEXT_WORD_IS_OBJECT;
                 word->flags |= LTEXT_WORD_CAN_BREAK_LINE_AFTER;
                 word->y = 0;
@@ -688,6 +706,10 @@ void lvtextDraw( formatted_text_fragment_t * text, draw_buf_t * buf, int x, int 
 
 #ifdef __cplusplus
 
+#define DUMMY_IMAGE_SIZE 16
+
+int gFlgFloatingPunctuationEnabled = 1;
+
 void LFormattedText::AddSourceObject(
             lUInt16         flags,    /* flags */
             lUInt8          interval, /* interline space, *16 (16=single, 32=double) */
@@ -699,7 +721,7 @@ void LFormattedText::AddSourceObject(
     ldomNode * node = (ldomNode*)object;
     LVImageSourceRef img = node->getObjectImageSource();
     if ( img.isNull() )
-        img = LVCreateDummyImageSource( node, 50, 50 );
+        img = LVCreateDummyImageSource( node, DUMMY_IMAGE_SIZE, DUMMY_IMAGE_SIZE );
     lUInt16 width = (lUInt16)img->GetWidth();
     lUInt16 height = (lUInt16)img->GetHeight();
     lvtextAddSourceObject(m_pbuffer,
@@ -1082,7 +1104,7 @@ public:
             /* last char of src fragment */
             flags |= LTEXT_WORD_CAN_BREAK_LINE_AFTER;
         }
-        bool visualAlignmentEnabled = true;
+        bool visualAlignmentEnabled = gFlgFloatingPunctuationEnabled!=0;
         if ( lastc=='\t' ) {
             // tab
             if ( frmline->word_count==1 && frmline->x==0 && first_para_line->margin<0 ) {
@@ -1091,8 +1113,8 @@ public:
                     word->inline_width = -first_para_line->margin;
                 }
             }
-            if ( word->t.len>0 )
-                word->t.len--;
+            //if ( word->t.len>0 )
+            //    word->t.len--;
         } else if (lastchar & LCHAR_IS_SPACE) {
             flags |= LTEXT_WORD_CAN_ADD_SPACE_AFTER;
             if ( firstch<lastch ) {
@@ -1112,6 +1134,10 @@ public:
 
         word->flags = flags;
         frmline->width += word->inline_width; //!!!
+        if ( word->t.len==0 ) {
+            //
+            CRLog::error("Added word of length 0!!!");
+        }
         return word;
     }
 
@@ -1124,22 +1150,33 @@ public:
         formatted_word_t * word = lvtextAddFormattedWord( frmline );
         word->flags = 0;
         word->src_text_index = srcIndex;
+#if ARBITRARY_IMAGE_SCALE_ENABLED==1
+        int pscale_x = 1000 * m_pbuffer->width / srcline->o.width;
+        int pscale_y = 1000 * m_pbuffer->page_height / srcline->o.height;
+        int pscale = pscale_x < pscale_y ? pscale_x : pscale_y;
+        int maxscale = (MAX_IMAGE_SCALE_MUL>0 ? MAX_IMAGE_SCALE_MUL : 1) * 1000;
+        if ( pscale>maxscale )
+            pscale = maxscale;
+        word->o.height = srcline->o.height * pscale / 1000;
+        word->width = srcline->o.width * pscale / 1000;
+        word->inline_width = srcline->o.width * pscale / 1000;
+#else
         int scale_div = 1;
         int scale_mul = 1;
         int div_x = (srcline->o.width / m_pbuffer->width) + 1;
         int div_y = (srcline->o.height / m_pbuffer->page_height) + 1;
-//#if (MAX_IMAGE_SCALE_MUL==3)
-//        if ( srcline->o.height*3 < m_pbuffer->page_height-20
-//                && srcline->o.width*3 < m_pbuffer->width - 20 )
-//            scale_mul = 3;
-//        else
-//#endif
-//#if (MAX_IMAGE_SCALE_MUL==2) || (MAX_IMAGE_SCALE_MUL==3)
-//            if ( srcline->o.height*2 < m_pbuffer->page_height-20
-//                && srcline->o.width*2 < m_pbuffer->width - 20 )
-//            scale_mul = 2;
-//        else
-//#endif
+#if (MAX_IMAGE_SCALE_MUL==3)
+        if ( srcline->o.height*3 < m_pbuffer->page_height-20
+                && srcline->o.width*3 < m_pbuffer->width - 20 )
+            scale_mul = 3;
+        else
+#endif
+#if (MAX_IMAGE_SCALE_MUL==2) || (MAX_IMAGE_SCALE_MUL==3)
+            if ( srcline->o.height*2 < m_pbuffer->page_height-20
+                && srcline->o.width*2 < m_pbuffer->width - 20 )
+            scale_mul = 2;
+        else
+#endif
         if (div_x>1 || div_y>1) {
             if (div_x>div_y)
                 scale_div = div_x;
@@ -1149,6 +1186,7 @@ public:
         word->o.height = srcline->o.height * scale_mul / scale_div;
         word->width = srcline->o.width * scale_mul / scale_div;
         word->inline_width = srcline->o.width * scale_mul / scale_div;
+#endif
         word->flags |= LTEXT_WORD_IS_OBJECT;
         word->flags |= LTEXT_WORD_CAN_BREAK_LINE_AFTER;
         if ( srcIndex==m_pbuffer->srctextlen-1 || (m_pbuffer->srctext[srcIndex+1].flags&LTEXT_FLAG_NEWLINE) )
@@ -1500,7 +1538,7 @@ public:
                 } else {
                     // measure object
                     // assume i==start+1
-                    int objectWidth = 50; // TODO: real object width
+                    int objectWidth = DUMMY_IMAGE_SIZE; // TODO: real object width
                     lastWidth += objectWidth;
                     m_widths[start] = lastWidth;
                 }
@@ -1571,11 +1609,24 @@ public:
         frmline->x = x;
         src_text_fragment_t * lastSrc = m_srcs[start];
         int wstart = start;
+        bool lastIsSpace = false;
+        bool lastWord = false;
+        bool isObject = false;
+        bool isSpace = false;
+        bool nextIsSpace = false;
+        bool space = false;
         for ( int i=start+1; i<=end; i++ ) {
             src_text_fragment_t * newSrc = i<end ? m_srcs[start] : 0;
-            bool isObject = (m_flags[i] & LCHAR_IS_OBJECT);
-            bool space = addSpace && i<end && (m_flags[i] & LCHAR_IS_SPACE) && i<lastnonspace;
-            if ( i>wstart && (newSrc!=lastSrc || space) ) {
+            if ( i<end ) {
+                isObject = (m_flags[i] & LCHAR_IS_OBJECT);
+                isSpace = (m_flags[i] & LCHAR_IS_SPACE);
+                nextIsSpace = i<end-1 && (m_flags[i+1] & LCHAR_IS_SPACE);
+                space = addSpace && lastIsSpace && !isSpace && i<lastnonspace;
+            } else {
+                lastWord = true;
+            }
+            if ( i>wstart && (newSrc!=lastSrc || space || lastWord) ) {
+                // create and add new word
                 formatted_word_t * word = lvtextAddFormattedWord(frmline);
                 if ( lastSrc->flags & LTEXT_SRC_IS_OBJECT ) {
                     // object
@@ -1587,6 +1638,7 @@ public:
                 lastSrc = newSrc;
                 wstart = i;
             }
+            lastIsSpace = isSpace;
         }
     }
 
@@ -1653,11 +1705,11 @@ public:
     void dealloc()
     {
         if ( !m_staticBufs ) {
-            delete m_text;
-            delete m_flags;
-            delete m_srcs;
-            delete m_charindex;
-            delete m_widths;
+            delete[] m_text;
+            delete[] m_flags;
+            delete[] m_srcs;
+            delete[] m_charindex;
+            delete[] m_widths;
         }
     }
 

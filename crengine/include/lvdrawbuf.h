@@ -221,6 +221,7 @@ enum DrawBufPixelFormat
     DRAW_BUF_3_BPP = 3, /// 3 bpp, 1 pixel per byte, higher 3 bits are significant
     DRAW_BUF_4_BPP = 4, /// 4 bpp, 1 pixel per byte, higher 4 bits are significant
     DRAW_BUF_8_BPP = 8, /// 8 bpp, 1 pixel per byte, all 8 bits are significant
+    DRAW_BUF_16_BPP = 16, /// color 16bit RGB 565
     DRAW_BUF_32_BPP = 32, /// color 32bit RGB 888
 };
 
@@ -285,6 +286,14 @@ inline lUInt32 RevRGB( lUInt32 cl )
     return ((cl>>16)&255) | ((cl<<16)&0xFF0000) | (cl&0x00FF00);
 }
 
+inline lUInt32 rgb565to888(lUInt32 cl ) {
+    return ((cl & 0xF800)<<8) | ((cl & 0x07E0)<<5) | ((cl & 0x001F)<<3);
+}
+
+inline lUInt16 rgb888to565(lUInt32 cl ) {
+    return (lUInt16)(((cl>>8)& 0xF800) | ((cl>>5 )& 0x07E0) | ((cl>>3 )& 0x001F));
+}
+
 /// 32-bit RGB buffer
 class LVColorDrawBuf : public LVBaseDrawBuf
 {
@@ -293,7 +302,8 @@ private:
     HDC _drawdc;
     HBITMAP _drawbmp;
 #endif
-
+    int _bpp;
+    bool _ownData;
 public:
     /// rotates buffer contents by specified angle
     virtual void Rotate( cr_rotate_angle_t angle );
@@ -327,8 +337,11 @@ public:
     virtual void Draw( int x, int y, const lUInt8 * bitmap, int width, int height, lUInt32 * palette );
     /// returns scanline pointer
     virtual lUInt8 * GetScanLine( int y );
-    /// constructor
-    LVColorDrawBuf(int dx, int dy);
+
+    /// create own draw buffer
+    LVColorDrawBuf(int dx, int dy, int bpp=32);
+    /// creates wrapper around external RGBA buffer
+    LVColorDrawBuf(int dx, int dy, lUInt8 * externalBuffer, int bpp=32 );
     /// destructor
     virtual ~LVColorDrawBuf();
     /// convert to 1-bit bitmap

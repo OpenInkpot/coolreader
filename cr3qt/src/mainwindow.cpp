@@ -208,7 +208,7 @@ void MainWindow::on_actionOpen_triggered()
     }
     QString fileName = QFileDialog::getOpenFileName(this, tr("Open book file"),
          lastPath,
-         tr("All supported formats (*.fb2 *.txt *.tcr *.rtf *.epub *.html *.htm *.zip);;FB2 books (*.fb2 *.fb2.zip);;Text files (*.txt);;Rich text (*.rtf);;HTML files (*.htm *.html);;EPUB files (*.epub);;ZIP archives (*.zip)"));
+         tr("All supported formats (*.fb2 *.txt *.tcr *.rtf *.epub *.html *.htm *.chm *.zip);;FB2 books (*.fb2 *.fb2.zip);;Text files (*.txt);;Rich text (*.rtf);;HTML files (*.htm *.html);;EPUB files (*.epub);;CHM files (*.chm);;ZIP archives (*.zip)"));
     if ( fileName.length()==0 )
         return;
     if ( !ui->view->loadDocument( fileName ) ) {
@@ -346,6 +346,20 @@ void MainWindow::onPropsChange( PropsRef props )
         }
         if ( name == PROP_WINDOW_SHOW_SCROLLBAR ) {
             ui->scroll->setVisible( v );
+        }
+        if ( name == PROP_BACKGROUND_IMAGE ) {
+            lString16 fn = qt2cr(value);
+            LVImageSourceRef img;
+            if ( !fn.empty() && fn[0]!='[' ) {
+                CRLog::debug("Background image file: %s", LCSTR(fn));
+                LVStreamRef stream = LVOpenFileStream(fn.c_str(), LVOM_READ);
+                if ( !stream.isNull() ) {
+                    img = LVCreateStreamImageSource(stream);
+                }
+            }
+            fn.lowercase();
+            bool tiled = ( fn.pos(lString16("\\textures\\"))>=0 || fn.pos(lString16("/textures/"))>=0);
+            ui->view->getDocView()->setBackgroundImage(img, tiled);
         }
         if ( name == PROP_WINDOW_TOOLBAR_SIZE ) {
             ui->mainToolBar->setVisible( v );

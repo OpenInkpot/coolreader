@@ -33,7 +33,18 @@
 #include "../include/hyphman.h"
 #include "../include/lvfnt.h"
 #include "../include/lvstring.h"
+
+
+#ifdef ANDROID
+
+#define _16(x) lString16(x)
+
+#else
+
 #include "../include/cri18n.h"
+
+#endif
+
 
 HyphDictionary * HyphMan::_selectedDictionary = NULL;
 
@@ -45,6 +56,7 @@ class TexPattern;
 class TexHyph : public HyphMethod
 {
     TexPattern * table[PATTERN_HASH_SIZE];
+    lUInt32 _hash;
 public:
     bool match( const lChar16 * str, char * mask );
     virtual bool hyphenate( const lChar16 * str, int len, lUInt16 * widths, lUInt8 * flags, lUInt16 hyphCharWidth, lUInt16 maxWidth );
@@ -53,6 +65,7 @@ public:
     virtual ~TexHyph();
     bool load( LVStreamRef stream );
     bool load( lString16 fileName );
+    virtual lUInt32 getHash() { return _hash; }
 };
 
 class AlgoHyph : public HyphMethod
@@ -107,6 +120,33 @@ void HyphMan::uninit()
     _method = &NO_HYPH;
 }
 
+bool HyphMan::activateDictionaryFromStream( LVStreamRef stream )
+{
+    if ( stream.isNull() )
+        return false;
+    CRLog::trace("remove old hyphenation method");
+    if ( HyphMan::_method != &NO_HYPH && HyphMan::_method != &ALGO_HYPH && HyphMan::_method ) {
+        delete HyphMan::_method;
+        HyphMan::_method = &NO_HYPH;
+    }
+    CRLog::trace("creating new TexHyph method");
+    TexHyph * method = new TexHyph();
+    CRLog::trace("loading from file");
+    if ( !method->load( stream ) ) {
+		CRLog::error("HyphMan::activateDictionaryFromStream: Cannot open hyphenation dictionary from stream" );
+        delete method;
+        return false;
+    }
+    CRLog::debug("Dictionary is loaded successfully. Activating.");
+    HyphMan::_method = method;
+    if ( HyphMan::_dictList->find(lString16(HYPH_DICT_ID_DICTIONARY))==NULL ) {
+        HyphDictionary * dict = new HyphDictionary( HDT_DICT_ALAN, lString16("Dictionary"), lString16(HYPH_DICT_ID_DICTIONARY), lString16() );
+        HyphMan::_dictList->add(dict);
+    	HyphMan::_selectedDictionary = dict;
+    }
+    CRLog::trace("Activation is done");
+    return true;
+}
 
 bool HyphMan::initDictionaries( lString16 dir )
 {
@@ -195,6 +235,8 @@ bool HyphDictionaryList::open( lString16 hyphDirectory )
     CRLog::info("HyphDictionaryList::open(%s)", LCSTR(hyphDirectory) );
     _list.clear();
     addDefault();
+    if ( hyphDirectory.empty() )
+	return true;
     //LVAppendPathDelimiter( hyphDirectory );
     LVContainerRef container;
     LVStreamRef stream;
@@ -411,6 +453,7 @@ public:
 TexHyph::TexHyph()
 {
     memset( table, 0, sizeof(table) );
+    _hash = 123456;
 }
 
 TexHyph::~TexHyph()
@@ -440,6 +483,7 @@ bool TexHyph::load( LVStreamRef stream )
     int w = isCorrectHyphFile(stream.get());
     int patternCount = 0;
     if (w) {
+        _hash = stream->crc32();
         int        i;
         lvsize_t   dw;
 
@@ -465,7 +509,6 @@ bool TexHyph::load( LVStreamRef stream )
             if ( stream->Seek( hyph.len, LVSEEK_CUR, &newPos )!=LVERR_OK )
                 return false;
 
-            unsigned char ch = hyph.al;
             cnv.msf( hyph.wl );
             cnv.msf( hyph.wu );
             charMap[ (unsigned char)hyph.al ] = hyph.wl;

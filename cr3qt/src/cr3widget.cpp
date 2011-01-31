@@ -155,6 +155,17 @@ CR3View::CR3View( QWidget *parent)
     icons.add( LVCreateXPMImageSource( battery4 ) );
     _docview->setBatteryIcons( icons );
     _docview->setBatteryState( -1 );
+//    LVStreamRef stream;
+//    stream = LVOpenFileStream("/home/lve/.cr3/textures/old_paper.png", LVOM_READ);
+    //stream = LVOpenFileStream("/home/lve/.cr3/textures/tx_wood.jpg", LVOM_READ);
+    //stream = LVOpenFileStream("/home/lve/.cr3/backgrounds/Background1.jpg", LVOM_READ);
+//    if ( !stream.isNull() ) {
+//        LVImageSourceRef img = LVCreateStreamCopyImageSource(stream);
+//        if ( !img.isNull() ) {
+//            //img = LVCreateUnpackedImageSource(img, 1256*1256*4, false);
+//            _docview->setBackgroundImage(img, true);
+//        }
+//    }
     updateDefProps();
     setMouseTracking(true);
 }
@@ -246,7 +257,7 @@ bool CR3View::loadDocument( QString fileName )
     clearSelection();
     bool res = _docview->LoadDocument( qt2cr(fileName).c_str() );
     if ( res ) {
-        //_docview->swapToCache();
+        _docview->swapToCache();
         QByteArray utf8 = fileName.toUtf8();
         CRLog::debug( "Trying to restore position for %s", utf8.constData() );
         _docview->restorePosition();
@@ -292,22 +303,42 @@ void CR3View::paintEvent ( QPaintEvent * event )
     QPainter painter(this);
     QRect rc = rect();
     LVDocImageRef ref = _docview->getPageImage(0);
+    if ( ref.isNull() ) {
+        //painter.fillRect();
+        return;
+    }
     LVDrawBuf * buf = ref->getDrawBuf();
     int dx = buf->GetWidth();
     int dy = buf->GetHeight();
-    QImage img(dx, dy, QImage::Format_RGB32 );
-    for ( int i=0; i<dy; i++ ) {
-        unsigned char * dst = img.scanLine( i );
-        unsigned char * src = buf->GetScanLine(i);
-        for ( int x=0; x<dx; x++ ) {
-            *dst++ = *src++;
-            *dst++ = *src++;
-            *dst++ = *src++;
-            *dst++ = 0xFF;
-            src++;
+    if ( buf->GetBitsPerPixel()==16 ) {
+        QImage img(dx, dy, QImage::Format_RGB16 );
+        for ( int i=0; i<dy; i++ ) {
+            unsigned char * dst = img.scanLine( i );
+            unsigned char * src = buf->GetScanLine(i);
+            for ( int x=0; x<dx; x++ ) {
+                *dst++ = *src++;
+                *dst++ = *src++;
+//                *dst++ = *src++;
+//                *dst++ = 0xFF;
+//                src++;
+            }
         }
+        painter.drawImage( rc, img );
+    } else if ( buf->GetBitsPerPixel()==32 ) {
+        QImage img(dx, dy, QImage::Format_RGB32 );
+        for ( int i=0; i<dy; i++ ) {
+            unsigned char * dst = img.scanLine( i );
+            unsigned char * src = buf->GetScanLine(i);
+            for ( int x=0; x<dx; x++ ) {
+                *dst++ = *src++;
+                *dst++ = *src++;
+                *dst++ = *src++;
+                *dst++ = 0xFF;
+                src++;
+            }
+        }
+        painter.drawImage( rc, img );
     }
-    painter.drawImage( rc, img );
     if ( _editMode ) {
         // draw caret
         lvRect cursorRc;
@@ -705,7 +736,7 @@ bool CR3View::updateSelection( ldomXPointer p )
     //CRLog::debug("Range: %s - %s", UnicodeToUtf8(start).c_str(), UnicodeToUtf8(end).c_str());
     r.setFlags(1);
     _docview->selectRange( r );
-    _selText = cr2qt( r.getRangeText( '\n', 100000 ) );
+    _selText = cr2qt( r.getRangeText( '\n', 10000 ) );
     _selected = true;
     _selRange = r;
     update();
@@ -723,6 +754,7 @@ void CR3View::mousePressEvent ( QMouseEvent * event )
     lString16 href;
     if ( !p.isNull() ) {
         path = p.toString();
+        CRLog::debug("mousePressEvent(%s)", LCSTR(path));
         bool ctrlPressed = (event->modifiers() & Qt::ControlModifier)!=0;
         if ( ctrlPressed || !_editMode )
             href = p.getHRef();

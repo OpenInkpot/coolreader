@@ -399,7 +399,7 @@ int LVTextFileBase::ReadChars( lChar16 * buf, int maxsize )
 }
 
 /// tries to autodetect text encoding
-bool LVTextFileBase::AutodetectEncoding()
+bool LVTextFileBase::AutodetectEncoding( bool utfOnly )
 {
     char enc_name[32];
     char lang_name[32];
@@ -413,20 +413,26 @@ bool LVTextFileBase::AutodetectEncoding()
     unsigned char * buf = new unsigned char[ sz ];
     lvsize_t bytesRead = 0;
     if ( m_stream->Read( buf, sz, &bytesRead )!=LVERR_OK ) {
-        delete buf;
+        delete[] buf;
         m_stream->SetPos( oldpos );
         return false;
     }
 
-    AutodetectCodePage( buf, sz, enc_name, lang_name );
-    CRLog::info("Code page decoding results: encoding=%s, lang=%s", enc_name, lang_name);
-    m_lang_name = lString16( lang_name );
-    SetCharset( lString16( enc_name ).c_str() );
-
-    // restore state
+    int res = 0;
+    if ( utfOnly )
+        res = AutodetectCodePageUtf( buf, sz, enc_name, lang_name );
+    else
+        res = AutodetectCodePage( buf, sz, enc_name, lang_name );
     delete[] buf;
     m_stream->SetPos( oldpos );
-    return true;
+    if ( res) {
+        //CRLog::debug("Code page decoding results: encoding=%s, lang=%s", enc_name, lang_name);
+        m_lang_name = lString16( lang_name );
+        SetCharset( lString16( enc_name ).c_str() );
+    }
+
+    // restore state
+    return res!=0  || utfOnly;
 }
 
 /// seek to specified stream position
@@ -599,7 +605,7 @@ void LVTextFileBase::SetCharsetTable( const lChar16 * table )
     {
         if (m_conv_table)
         {
-            delete m_conv_table;
+            delete[] m_conv_table;
             m_conv_table = NULL;
         }
         return;
@@ -739,7 +745,22 @@ public:
     }
 };
 
-#define MAX_HEADING_CHARS 50
+// returns char like '*' in "* * *"
+lChar16 getSingleLineChar( const lString16 & s) {
+    lChar16 nonSpace = 0;
+    for ( const lChar16 * p = s.c_str(); *p; p++ ) {
+        lChar16 ch = *p;
+        if ( ch!=' ' && ch!='\t' && ch!='\r' && ch!='\n' ) {
+            if ( nonSpace==0 )
+                nonSpace = ch;
+            else if ( nonSpace!=ch )
+                return 0;
+        }
+    }
+    return nonSpace;
+}
+
+#define MAX_HEADING_CHARS 48
 #define MAX_PARA_LINES 30
 #define MAX_BUF_LINES  200
 #define MIN_MULTILINE_PARA_WIDTH 45
@@ -776,6 +797,7 @@ private:
         tftEmptyLineDelimHeaders = 16,
         tftFormatted = 32, // text lines are wrapped and formatted
         tftJustified = 64, // right bound is justified
+        tftDoubleEmptyLineBeforeHeaders = 128,
         tftPreFormatted = 256
     } formatFlags_t;
 public:
@@ -824,7 +846,7 @@ public:
         }
         return true;
     }
-    inline int absCompare( int v1, int v2 )
+    inline static int absCompare( int v1, int v2 )
     {
         if ( v1<0 )
             v1 = -v1;
@@ -843,7 +865,7 @@ public:
             return la_empty;
         int center_dist = (line->rpos + line->lpos) / 2 - avg_center;
         int right_dist = line->rpos - avg_right;
-        int left_dist = line->lpos - avg_left;
+        int left_dist = line->lpos - max_left_stats_pos;
         if ( (formatFlags & tftJustified) || (formatFlags & tftFormatted) ) {
             if ( line->lpos==min_left && line->rpos==max_right )
                 return la_width;
@@ -869,7 +891,7 @@ public:
                 return la_indent;
         }
     }
-    bool isCentered( LVTextFileLine * line )
+    static bool isCentered( LVTextFileLine * line )
     {
         return line->align == la_centered;
     }
@@ -890,7 +912,7 @@ public:
         avg_left = 0;
         avg_right = 0;
         int i;
-#define MAX_PRE_STATS 256
+#define MAX_PRE_STATS 1000
         int left_stats[MAX_PRE_STATS];
         int right_stats[MAX_PRE_STATS];
         for ( i=0; i<MAX_PRE_STATS; i++ )
@@ -941,8 +963,8 @@ public:
         int non_empty_lines = length() - empty_lines;
         if ( non_empty_lines < 10 )
             return;
-        avg_left /= length();
-        avg_right /= length();
+        avg_left /= non_empty_lines;
+        avg_right /= non_empty_lines;
         avg_center = (avg_left + avg_right) / 2;
 
         //int best_left_align_percent = max_left_stats * 100 / length();
@@ -950,33 +972,50 @@ public:
         //int best_left_second_align_percent = max_left_second_stats * 100 / length();
 
 
+        int fw = max_right_stats_pos - max_left_stats_pos;
         for ( i=0; i<length(); i++ ) {
             LVTextFileLine * line = get(i);
             //CRLog::debug("    line(%d, %d)", line->lpos, line->rpos);
+            int lw = line->rpos - line->lpos;
             if ( line->lpos > min_left+1 ) {
                 int center_dist = (line->rpos + line->lpos) / 2 - avg_center;
                 //int right_dist = line->rpos - avg_right;
-                int left_dist = line->lpos - avg_left;
+                int left_dist = line->lpos - max_left_stats_pos;
                 //if ( absCompare( center_dist, right_dist )<0 )
-                if ( absCompare( center_dist, left_dist )<0 )
-                    center_lines++;
-                else
+                if ( absCompare( center_dist, left_dist )<0 ) {
+                    if ( line->lpos > min_left+fw/10 && line->lpos < max_right-fw/10 && lw < 9*fw/10 ) {
+                        center_lines++;
+                    }
+                } else
                     ident_lines++;
             }
         }
         for ( i=0; i<length(); i++ ) {
             get(i)->align = getFormat( get(i) );
         }
-        if ( avg_right >= 80 )
+        if ( avg_right >= 80 ) {
+            if ( empty_lines>non_empty_lines && empty_lines<non_empty_lines*110/100 ) {
+                formatFlags = tftParaPerLine | tftDoubleEmptyLineBeforeHeaders; // default format
+                return;
+            }
+            if ( empty_lines>non_empty_lines*2/3 ) {
+                formatFlags = tftEmptyLineDelimPara; // default format
+                return;
+            }
+            //tftDoubleEmptyLineBeforeHeaders
             return;
+        }
         formatFlags = 0;
-        int ident_lines_percent = ident_lines * 100 / length();
-        int center_lines_percent = center_lines * 100 / length();
-        int empty_lines_precent = empty_lines * 100 / length();
-        if ( empty_lines_precent > 5 )
+        int ident_lines_percent = ident_lines * 100 / non_empty_lines;
+        int center_lines_percent = center_lines * 100 / non_empty_lines;
+        int empty_lines_percent = empty_lines * 100 / length();
+        if ( empty_lines_percent > 5 )
             formatFlags |= tftEmptyLineDelimPara;
-        if ( ident_lines_percent > 5 )
+        if ( ident_lines_percent > 5 && ident_lines_percent<55 ) {
             formatFlags |= tftParaIdents;
+            if ( empty_lines_percent<7 )
+                formatFlags |= tftEmptyLineDelimHeaders;
+        }
         if ( center_lines_percent > 1 )
             formatFlags |= tftCenteredHeaders;
 
@@ -986,7 +1025,7 @@ public:
            formatFlags |= tftJustified; // right bound is justified
 
         CRLog::debug("detectFormatFlags() min_left=%d, max_right=%d, ident=%d, empty=%d, flags=%d",
-            min_left, max_right, ident_lines_percent, empty_lines_precent, formatFlags );
+            min_left, max_right, ident_lines_percent, empty_lines_percent, formatFlags );
 
         if ( !formatFlags ) {
             formatFlags = tftParaPerLine | tftEmptyLineDelimHeaders; // default format
@@ -1154,30 +1193,48 @@ public:
             str += item->text + L"\n";
         }
         bool singleLineFollowedByEmpty = false;
+        bool singleLineFollowedByTwoEmpty = false;
         if ( startline==endline && endline<length()-1 ) {
             if ( !(formatFlags & tftParaIdents) || get(startline)->lpos>0 )
-                if ( get(endline+1)->rpos==0 && (startline==0 || get(startline-1)->rpos==0) )
-                    singleLineFollowedByEmpty = get(startline)->text.length()<70;
+                if ( get(endline+1)->rpos==0 && (startline==0 || get(startline-1)->rpos==0) ) {
+                    singleLineFollowedByEmpty = get(startline)->text.length()<MAX_HEADING_CHARS;
+                    if ( (startline<=1 || get(startline-2)->rpos==0) )
+                        singleLineFollowedByTwoEmpty = get(startline)->text.length()<MAX_HEADING_CHARS;
+                }
         }
         str.trimDoubleSpaces(false, false, true);
-        bool isHeader = false;
-        if ( ( startline==endline && str.length()<4) || (paraCount<2 && str.length()<50 && endline<3 && startline<length()-1 && get(startline+1)->rpos==0 ) )
-            isHeader = true;
-        if ( startline==endline && get(startline)->isHeading() )
-            isHeader = true;
-        if ( startline==endline && (formatFlags & tftCenteredHeaders) && startline==endline && isCentered( get(startline) ) )
-            isHeader = true;
-        int hlevel = DetectHeadingLevelByText( str );
-        if ( hlevel>0 )
-            isHeader = true;
-        if ( singleLineFollowedByEmpty )
-            isHeader = true;
+        lChar16 singleChar = getSingleLineChar( str );
+        if ( singleChar!=0 && singleChar>='A' )
+            singleChar = 0;
+        bool isHeader = singleChar!=0;
+        if ( formatFlags & tftDoubleEmptyLineBeforeHeaders ) {
+            isHeader = singleLineFollowedByTwoEmpty;
+            if ( singleLineFollowedByEmpty && startline<3 && str.length()<MAX_HEADING_CHARS )
+                isHeader = true;
+            else if ( startline<2 && str.length()<MAX_HEADING_CHARS )
+                isHeader = true;
+            if ( str.length()==0 )
+                return; // no empty lines
+        } else {
+
+            if ( ( startline==endline && str.length()<4) || (paraCount<2 && str.length()<50 && startline<length()-2 && (get(startline+1)->rpos==0||get(startline+2)->rpos==0) ) ) //endline<3 &&
+                isHeader = true;
+            if ( startline==endline && get(startline)->isHeading() )
+                isHeader = true;
+            if ( startline==endline && (formatFlags & tftCenteredHeaders) && startline==endline && isCentered( get(startline) ) )
+                isHeader = true;
+            int hlevel = DetectHeadingLevelByText( str );
+            if ( hlevel>0 )
+                isHeader = true;
+            if ( singleLineFollowedByEmpty && !(formatFlags & tftEmptyLineDelimPara) )
+                isHeader = true;
+        }
         if ( str.length() > MAX_HEADING_CHARS )
             isHeader = false;
         if ( !str.empty() ) {
             const lChar16 * title_tag = L"title";
             if ( isHeader ) {
-                if ( str.compare(L"* * *")==0 ) {
+                if ( singleChar ) { //str.compare(L"* * *")==0 ) {
                     title_tag = L"subtitle";
                     lastParaWasTitle = false;
                 } else {
@@ -1209,14 +1266,21 @@ public:
     /// one line per paragraph
     bool DoParaPerLineImport(LVXMLParserCallback * callback)
     {
-        int firstPageTextCounter = 0;
         CRLog::debug("DoParaPerLineImport()");
+        int remainingLines = 0;
         do {
-            for ( int i=0; i<length(); i++ ) {
-                AddPara( i, i, callback );
+            for ( int i=remainingLines; i<length(); i++ ) {
+                if ( formatFlags & tftDoubleEmptyLineBeforeHeaders ) {
+                    LVTextFileLine * item = get(i);
+                    if ( !item->empty() )
+                        AddPara( i, i, callback );
+                } else {
+                    AddPara( i, i, callback );
+                }
                 file->updateProgress();
             }
-            RemoveLines( length() );
+            RemoveLines( length()-3 );
+            remainingLines = 3;
         } while ( ReadLines( 100 ) );
         if ( inSubSection )
             callback->OnTagClose( NULL, L"section" );
@@ -1278,6 +1342,13 @@ public:
             }
             if ( pos>=length() )
                 break;
+            // skip starting empty lines
+            while ( pos<length() ) {
+                LVTextFileLine * item = get(pos);
+                if ( item->lpos!=item->rpos )
+                    break;
+                pos++;
+            }
             int i=pos;
             if ( pos>=length() || DetectHeadingLevelByText( get(pos)->text )==0 ) {
                 for ( ; i<length() && i<pos+MAX_PARA_LINES; i++ ) {
@@ -1318,9 +1389,9 @@ public:
     bool DoPreFormattedImport(LVXMLParserCallback * callback)
     {
         CRLog::debug("DoPreFormattedImport()");
-        int firstPageTextCounter = 0;
+        int remainingLines = 0;
         do {
-            for ( int i=0; i<length(); i++ ) {
+            for ( int i=remainingLines; i<length(); i++ ) {
                 LVTextFileLine * item = get(i);
                 if ( item->rpos > item->lpos ) {
                     callback->OnTagOpenNoAttr( NULL, L"pre" );
@@ -1332,7 +1403,8 @@ public:
                     callback->OnTagOpenAndClose( NULL, L"empty-line" );
                 }
            }
-            RemoveLines( length() );
+            RemoveLines( length()-3 );
+            remainingLines = 3;
         } while ( ReadLines( 100 ) );
         if ( inSubSection )
             callback->OnTagClose( NULL, L"section" );
@@ -1812,12 +1884,14 @@ void LVXMLParser::Reset()
     m_state = ps_bof;
 }
 
-LVXMLParser::LVXMLParser( LVStreamRef stream, LVXMLParserCallback * callback )
+LVXMLParser::LVXMLParser( LVStreamRef stream, LVXMLParserCallback * callback, bool allowHtml, bool fb2Only )
     : LVTextFileBase(stream)
     , m_callback(callback)
     , m_trimspaces(true)
     , m_state(0)
     , m_citags(false)
+    , m_allowHtml(allowHtml)
+    , m_fb2Only(fb2Only)
 
 {
     m_firstPageTextCounter = 2000;
@@ -1850,8 +1924,9 @@ bool LVXMLParser::CheckFormat()
     bool res = false;
     if ( charsDecoded > 30 ) {
         lString16 s( chbuf, charsDecoded );
-        if ( s.pos(L"<?xml") >=0 && s.pos(L"version=") >= 6 ||
-             s.pos(L"<html xmlns=\"http://www.w3.org/1999/xhtml\"")>=0 ) {
+        bool flg = !m_fb2Only || s.pos(L"<FictionBook") >= 0;
+        if ( flg && (( (s.pos(L"<?xml") >=0 || s.pos(L" xmlns=")>0 )&& s.pos(L"version=") >= 6) ||
+             m_allowHtml && s.pos(L"<html xmlns=\"http://www.w3.org/1999/xhtml\"")>=0 )) {
             //&& s.pos(L"<FictionBook") >= 0
             res = true;
             int encpos=s.pos(L"encoding=\"");
@@ -1892,6 +1967,7 @@ bool LVXMLParser::Parse()
     lString16 attrns;
     lString16 attrvalue;
     bool errorFlag = false;
+    int flags = m_callback->getFlags();
     for (;!m_eof && !errorFlag;)
     {
         if ( m_stopped )
@@ -2058,6 +2134,9 @@ bool LVXMLParser::Parse()
                 if ( m_citags ) {
                     attrns.lowercase();
                     attrname.lowercase();
+                }
+                if ( (flags & TXTFLG_CONVERT_8BIT_ENTITY_ENCODING) && m_conv_table ) {
+                    PreProcessXmlString( attrvalue, 0, m_conv_table );
                 }
                 m_callback->OnAttribute( attrns.c_str(), attrname.c_str(), attrvalue.c_str());
                 if (inXmlTag && attrname==L"encoding")
@@ -2363,7 +2442,7 @@ static const ent_def_t def_entity_table[] = {
 };
 
 // returns new length
-void PreProcessXmlString( lString16 & s, lUInt32 flags )
+void PreProcessXmlString( lString16 & s, lUInt32 flags, const lChar16 * enc_table )
 {
     lChar16 * str = s.modify();
     int len = s.length();
@@ -2414,7 +2493,11 @@ void PreProcessXmlString( lString16 & s, lUInt32 flags )
         }
         else
         {
-            if (state == 2 && ch>='0' && ch<='9')
+            if (state == 2 && ch=='x')
+                state = 22;
+            else if (state == 22 && hexDigit(ch)>=0)
+                nch = (nch << 4) | hexDigit(ch);
+            else if (state == 2 && ch>='0' && ch<='9')
                 nch = nch * 10 + (ch - '0');
             else if (ch=='#' && state==1)
                 state = 2;
@@ -2438,6 +2521,8 @@ void PreProcessXmlString( lString16 & s, lUInt32 flags )
                 if ( code ) {
                     i=k;
                     state = 0;
+                    if ( enc_table && code<256 && code>=128 )
+                        code = enc_table[code - 128];
                     str[j++] = code;
                     nsp = 0;
                 } else {
@@ -2579,7 +2664,10 @@ bool LVXMLParser::ReadText()
             //=====================================================
             lString16 nextText = m_txt_buf.substr( last_split_txtlen );
             m_txt_buf.limit( last_split_txtlen );
-            PreProcessXmlString( m_txt_buf, flags );
+            const lChar16 * enc_table = NULL;
+            if ( flags & TXTFLG_CONVERT_8BIT_ENTITY_ENCODING )
+                enc_table = this->m_conv_table;
+            PreProcessXmlString( m_txt_buf, flags, enc_table );
             if ( (flags & TXTFLG_TRIM) && (!(flags & TXTFLG_PRE) || (flags & TXTFLG_PRE_PARA_SPLITTING)) ) {
                 m_txt_buf.trimDoubleSpaces(
                     ((flags & TXTFLG_TRIM_ALLOW_START_SPACE) || pre_para_splitting)?true:false,
@@ -2709,6 +2797,8 @@ lString16 htmlCharset( lString16 htmlHeader )
         else
             break;
     }
+    if ( enc==L"utf-16" )
+        return lString16();
     return enc;
 }
 
@@ -2718,7 +2808,7 @@ bool LVHTMLParser::CheckFormat()
 {
     Reset();
     // encoding test
-    if ( !AutodetectEncoding() )
+    if ( !AutodetectEncoding(!this->m_encoding_name.empty()) )
         return false;
     lChar16 * chbuf = new lChar16[XML_PARSER_DETECT_SIZE];
     FillBuffer( XML_PARSER_DETECT_SIZE );

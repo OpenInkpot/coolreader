@@ -22,7 +22,9 @@
 #endif
 #define USE_DOM_UTF8_STORAGE                 1
 #define CR_USE_THREADS                       0
+#ifndef MAX_IMAGE_SCALE_MUL
 #define MAX_IMAGE_SCALE_MUL                  2
+#endif
 #define USE_ZLIB                             1
 #define COLOR_BACKBUFFER                     0
 #define USE_ANSI_FILES                       1
@@ -64,7 +66,9 @@
 #define USE_ANSI_FILES                       1
 #define GRAY_INVERSE                         0
 #define USE_FREETYPE                         1
+#ifndef ANDROID
 #define USE_FONTCONFIG						 1
+#endif
 #define ALLOW_KERNING                        1
 #define GLYPH_CACHE_SIZE                     0x40000
 #define ZIP_STREAM_BUFFER_SIZE               0x40000
@@ -81,7 +85,9 @@
 #define COLOR_BACKBUFFER                     1
 #endif
 #define GRAY_INVERSE						 0
+#ifndef MAX_IMAGE_SCALE_MUL
 #define MAX_IMAGE_SCALE_MUL                  1
+#endif
 #if defined(CYGWIN)
 #define USE_FREETYPE                         0
 #else
@@ -234,7 +240,7 @@
 
 /// maximum picture zoom (1, 2, 3)
 #ifndef MAX_IMAGE_SCALE_MUL
-#define MAX_IMAGE_SCALE_MUL 1
+#define MAX_IMAGE_SCALE_MUL 2
 #endif
 
 // max unpacked size of skin image to hold in cache unpacked

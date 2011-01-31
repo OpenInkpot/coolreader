@@ -27,6 +27,7 @@
 #define PROP_FONT_FACE               "font.face.default"
 #define PROP_FONT_WEIGHT_EMBOLDEN    "font.face.weight.embolden"
 #define PROP_BACKGROUND_COLOR        "background.color.default"
+#define PROP_BACKGROUND_IMAGE        "background.image.filename"
 #define PROP_TXT_OPTION_PREFORMATTED "crengine.file.txt.preformatted"
 #define PROP_LOG_FILENAME            "crengine.log.filename"
 #define PROP_LOG_LEVEL               "crengine.log.level"
@@ -53,12 +54,19 @@
 #define PROP_FOOTNOTES               "crengine.footnotes"
 #define PROP_SHOW_TIME               "window.status.clock"
 #define PROP_SHOW_TITLE              "window.status.title"
+#define PROP_STATUS_CHAPTER_MARKS    "crengine.page.header.chapter.marks"
 #define PROP_SHOW_BATTERY            "window.status.battery"
+#define PROP_SHOW_POS_PERCENT        "window.status.pos.percent"
+#define PROP_SHOW_PAGE_COUNT         "window.status.pos.page.count"
+#define PROP_SHOW_PAGE_NUMBER        "window.status.pos.page.number"
 #define PROP_SHOW_BATTERY_PERCENT    "window.status.battery.percent"
 #define PROP_FONT_KERNING_ENABLED    "font.kerning.enabled"
 #define PROP_LANDSCAPE_PAGES         "window.landscape.pages"
 #define PROP_HYPHENATION_DICT        "crengine.hyphenation.directory"
 #define PROP_AUTOSAVE_BOOKMARKS      "crengine.autosave.bookmarks"
+
+#define PROP_FLOATING_PUNCTUATION    "crengine.style.floating.punctuation.enabled"
+
 
 #define PROP_MIN_FILE_SIZE_TO_CACHE  "crengine.cache.filesize.min"
 #define PROP_FORCED_MIN_FILE_SIZE_TO_CACHE  "crengine.cache.forced.filesize.min"
@@ -73,7 +81,15 @@ typedef enum {
     txt_format_auto  // autodetect format
 } txt_format_t;
 
+#ifndef CR_ENABLE_PAGE_IMAGE_CACHE
+#ifdef ANDROID
+#define CR_ENABLE_PAGE_IMAGE_CACHE 0
+#else
+#define CR_ENABLE_PAGE_IMAGE_CACHE 1
+#endif
+#endif//#ifndef CR_ENABLE_PAGE_IMAGE_CACHE
 
+#if CR_ENABLE_PAGE_IMAGE_CACHE==1
 /// Page imege holder which allows to unlock mutex after destruction
 class LVDocImageHolder
 {
@@ -132,8 +148,8 @@ class LVDocViewImageCache
         {
             for ( int i=0; i<2; i++ ) {
                 if ( _items[i]._valid &&
-                     (_items[i]._offset == offset && offset!=-1
-                      || _items[i]._page==page && page!=-1) ) {
+                     ( (_items[i]._offset == offset && offset!=-1)
+                      || (_items[i]._page==page && page!=-1)) ) {
                     if ( !_items[i]._ready ) {
                         _items[i]._thread->join();
                         _items[i]._thread = NULL;
@@ -158,8 +174,8 @@ class LVDocViewImageCache
         {
             _mutex.lock();
             for ( int i=0; i<2; i++ ) {
-                if ( _items[i]._valid && (_items[i]._offset == offset && offset!=-1
-                      || _items[i]._page==page && page!=-1) ) {
+                if ( _items[i]._valid && ( (_items[i]._offset == offset && offset!=-1)
+                      || (_items[i]._page==page && page!=-1)) ) {
                     return true;
                 }
             }
@@ -190,6 +206,7 @@ class LVDocViewImageCache
             clear();
         }
 };
+#endif
 
 #define LVDOCVIEW_COMMANDS_START 100
 /// LVDocView commands
@@ -222,6 +239,10 @@ enum LVDocCmd
     DCMD_SAVE_HISTORY, // save history and bookmarks
     DCMD_SAVE_TO_CACHE, // save document to cache for fast opening
     DCMD_TOGGLE_BOLD, // togle font bolder attribute
+    DCMD_SCROLL_BY, // scroll by N pixels, for Scroll view mode only
+    DCMD_REQUEST_RENDER, // invalidate rendered data
+    DCMD_GO_PAGE_DONT_SAVE_HISTORY,
+    DCMD_SET_INTERNAL_STYLES, // set internal styles option
 
     //=======================================
     DCMD_EDIT_CURSOR_LEFT,
@@ -268,11 +289,15 @@ enum {
     PGHDR_TITLE=8,
     PGHDR_CLOCK=16,
     PGHDR_BATTERY=32,
+    PGHDR_CHAPTER_MARKS=64,
+    PGHDR_PERCENT=128,
 };
 
 
 //typedef lUInt64 LVPosBookmark;
 
+
+#define DEF_COLOR_BUFFER_BPP 32
 
 /**
     \brief XML document view
@@ -281,7 +306,7 @@ enum {
 
     Supports scroll view of document.
 */
-class LVDocView
+class LVDocView : public CacheLoadingCallback
 {
     friend class LVDrawThread;
 private:
@@ -316,6 +341,7 @@ private:
     */
     lUInt32 m_backgroundColor;
     lUInt32 m_textColor;
+    lUInt32 m_statusColor;
     font_ref_t     m_font;
     font_ref_t     m_infoFont;
     LVFontRef      m_batteryFont;
@@ -327,6 +353,10 @@ private:
     LVRendPageList m_pages;
     LVScrollInfo m_scrollinfo;
     LVImageSourceRef m_defaultCover;
+    LVImageSourceRef m_backgroundImage;
+    LVRef<LVColorDrawBuf> m_backgroundImageScaled;
+    bool m_backgroundTiled;
+
 
 protected:
     lString16 m_last_clock;
@@ -335,6 +365,10 @@ protected:
 
 private:
     lString16 m_filename;
+#define ORIGINAL_FILENAME_PATCH
+#ifdef ORIGINAL_FILENAME_PATCH
+    lString16 m_originalFilename;
+#endif
     lvsize_t  m_filesize;
 
 
@@ -356,7 +390,9 @@ private:
     bool m_section_bounds_valid;
 
     LVMutex _mutex;
+#if CR_ENABLE_PAGE_IMAGE_CACHE==1
     LVDocViewImageCache m_imageCache;
+#endif
 
 
     lString8 m_defaultFontFace;
@@ -395,11 +431,13 @@ private:
     void updateLayout();
     /// parse document from m_stream
     bool ParseDocument( );
-
+    /// format of document from cache is known
+    virtual void OnCacheFileFormatDetected( doc_format_t fmt );
 
 protected:
     /// draw to specified buffer by either Y pos or page number (unused param should be -1)
     void Draw( LVDrawBuf & drawbuf, int pageTopPosition, int pageNumber, bool rotate );
+
 
     virtual void drawNavigationBar( LVDrawBuf * drawbuf, int pageIndex, int percent );
 
@@ -417,7 +455,7 @@ protected:
     /// selects link on page, if any (delta==0 - current, 1-next, -1-previous). returns selected link range, null if no links.
     virtual ldomXRange * selectPageLink( int delta, bool wrapAround);
     /// set status bar and clock mode
-    void setStatusMode( int newMode, bool showClock, bool showTitle, bool showBattery );
+    void setStatusMode( int newMode, bool showClock, bool showTitle, bool showBattery, bool showChapterMarks, bool showPercent, bool showPageNumber, bool showPageCount );
     /// create document and set flags
     void createEmptyDocument();
     /// get document rectangle for specified cursor position, returns false if not visible
@@ -425,8 +463,16 @@ protected:
     /// get screen rectangle for specified cursor position, returns false if not visible
     bool getCursorRect( ldomXPointer ptr, lvRect & rc, bool scrollToCursor = false );
 public:
+    LVFontRef getBatteryFont() { return m_batteryFont; }
+    void setBatteryFont( LVFontRef font ) { m_batteryFont=font; }
+
+    /// draw current page to specified buffer
+    void Draw( LVDrawBuf & drawbuf );
+    
+    /// close document
+    void close();
     /// set buffer format
-    int setDrawBufferBits( int bits ) { m_drawBufferBits = bits; }
+    void setDrawBufferBits( int bits ) { m_drawBufferBits = bits; }
     /// substitute page header with custom text (e.g. to be used while loading)
     void setPageHeaderOverride( lString16 s );
     /// get screen rectangle for current cursor position, returns false if not visible
@@ -472,9 +518,9 @@ public:
     bool removeBookmark( CRBookmark * bm );
     /// restores page using bookmark by numbered shortcut
 	bool goToPageShortcutBookmark( int number );
-    /// returns true if page image is available (0=current, -1=prev, 1=next)
+    /// returns true if coverpage display is on
     bool getShowCover() { return  m_showCover; }
-    /// returns true if page image is available (0=current, -1=prev, 1=next)
+    /// sets coverpage display flag
     void setShowCover( bool show ) { m_showCover = show; }
     /// returns true if page image is available (0=current, -1=prev, 1=next)
     bool isPageImageReady( int delta );
@@ -491,6 +537,13 @@ public:
     LVImageSourceRef getDefaultCover() const { return m_defaultCover; }
     /// set default cover image (for books w/o cover)
     void setDefaultCover(LVImageSourceRef cover) { m_defaultCover = cover; clearImageCache(); }
+
+    /// get background image
+    LVImageSourceRef getBackgroundImage() const { return m_backgroundImage; }
+    /// set background image
+    void setBackgroundImage(LVImageSourceRef bgImage, bool tiled=true) { m_backgroundImage = bgImage; m_backgroundTiled=tiled; m_backgroundImageScaled.Clear(); clearImageCache(); }
+    /// clears page background
+    void drawPageBackground( LVDrawBuf & drawbuf, int offsetX, int offsetY );
 
     // callback functions
     /// set callback
@@ -554,12 +607,14 @@ public:
     void requestReload();
     /// invalidate image cache, request redraw
     void clearImageCache();
+#if CR_ENABLE_PAGE_IMAGE_CACHE==1
     /// get page image (0=current, -1=prev, 1=next)
     LVDocImageRef getPageImage( int delta );
     /// returns true if current page image is ready
     bool IsDrawed();
     /// cache page image (render in background if necessary) (0=current, -1=prev, 1=next)
     void cachePageImage( int delta );
+#endif
     /// return view mutex
     LVMutex & getMutex() { return _mutex; }
     /// update selection ranges
@@ -649,7 +704,7 @@ public:
     void setBackgroundColor( lUInt32 cl )
     {
         m_backgroundColor = cl;
-        m_imageCache.clear();
+        clearImageCache();
     }
     /// returns text color
     lUInt32 getTextColor()
@@ -660,7 +715,19 @@ public:
     void setTextColor( lUInt32 cl )
     {
         m_textColor = cl;
-        m_imageCache.clear();
+        clearImageCache();
+    }
+
+    /// returns text color
+    lUInt32 getStatusColor()
+    {
+        return m_statusColor;
+    }
+    /// sets text color
+    void setStatusColor( lUInt32 cl )
+    {
+        m_statusColor = cl;
+        clearImageCache();
     }
 
     CRPageSkinRef getPageSkin();
@@ -704,6 +771,8 @@ public:
     void drawCoverTo( LVDrawBuf * drawBuf, lvRect & rc );
     /// returns cover page image source, if any
     LVImageSourceRef getCoverPageImage();
+    /// returns cover page image stream, if any
+    LVStreamRef getCoverPageImageStream();
 
     /// returns bookmark
     ldomXPointer getBookmark();
@@ -728,7 +797,7 @@ public:
     int getPosPercent();
 
     /// execute command
-    void doCommand( LVDocCmd cmd, int param=0 );
+    int doCommand( LVDocCmd cmd, int param=0 );
 
     /// set document stylesheet text
     void setStyleSheet( lString8 css_text );
@@ -770,12 +839,12 @@ public:
     /// get position of view inside document
     void GetPos( lvRect & rc );
     /// set vertical position of view inside document
-    void SetPos( int pos, bool savePos=true );
+    int SetPos( int pos, bool savePos=true );
 
     /// get number of current page
     int getCurPage();
     /// move to specified page
-    void goToPage( int page );
+    bool goToPage( int page );
     /// returns page count
     int getPageCount();
 
@@ -792,6 +861,18 @@ public:
     void savePosition();
     /// restore last file position
     void restorePosition();
+
+#ifdef ORIGINAL_FILENAME_PATCH
+    void setOriginalFilename( const lString16 & fn ) {
+        m_originalFilename = fn;
+    }
+    const lString16 & getOriginalFilename() {
+        return m_originalFilename;
+    }
+    void setMinFileSizeToCache( int size ) {
+        m_props->setInt(PROP_MIN_FILE_SIZE_TO_CACHE, size);
+    }
+#endif
 
     /// render (format) document
     void Render( int dx=0, int dy=0, LVRendPageList * pages=NULL );

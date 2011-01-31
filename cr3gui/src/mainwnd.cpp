@@ -326,9 +326,9 @@ V3DocViewWin::V3DocViewWin( CRGUIWindowManager * wm, lString16 dataDir )
         "   .................................",
     };
     icons.add( LVCreateXPMImageSource( battery_charge ) );
-#ifdef NO_BATTERY_GAUGE
-    icons.add( LVCreateXPMImageSource( battery_frame ) );
-#else
+//#ifdef NO_BATTERY_GAUGE
+//    icons.add( LVCreateXPMImageSource( battery_frame ) );
+//#else
     icons.add( LVCreateXPMImageSource( battery0 ) );
     icons.add( LVCreateXPMImageSource( battery1 ) );
     icons.add( LVCreateXPMImageSource( battery2 ) );
@@ -338,7 +338,8 @@ V3DocViewWin::V3DocViewWin( CRGUIWindowManager * wm, lString16 dataDir )
     icons.add( LVCreateXPMImageSource( battery6 ) );
     icons.add( LVCreateXPMImageSource( battery7 ) );
     icons.add( LVCreateXPMImageSource( battery8 ) );
-#endif
+//#endif
+    icons.add( LVCreateXPMImageSource( battery_frame ) );
     _docview->setBatteryIcons( icons );
     _wm->setBatteryIcons(icons);
     setAccelerators( _wm->getAccTables().get("main") );
@@ -872,7 +873,7 @@ VIEWER_MENU_4ABOUT=About...
 
     menu_win->setAccelerators( getMenuAccelerators() );
 
-    lString16 s("$1 - choose command\n$2, $3 - close");
+    lString16 s(_("$1 - choose command\n$2, $3 - close"));
     s.replaceParam(1, menu_win->getItemNumberKeysName());
     s.replaceParam(2, menu_win->getCommandKeyName(MCMD_OK) );
     s.replaceParam(3, menu_win->getCommandKeyName(MCMD_CANCEL) );
@@ -1083,6 +1084,9 @@ bool V3DocViewWin::onCommand( int command, int params )
         return true;
     case MCMD_GO_PAGE_APPLY:
         _docview->doCommand( DCMD_GO_PAGE, params-1 );
+        return true;
+    case MCMD_GO_PERCENT_APPLY:
+        _docview->doCommand( DCMD_GO_POS, params * _docview->GetFullHeight() / 100 );
         return true;
     case MCMD_SETTINGS_APPLY:
 #if CR_INTERNAL_PAGE_ORIENTATION==1

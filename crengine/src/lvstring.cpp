@@ -35,6 +35,15 @@ extern "C" {
 
 #define LS_DEBUG_CHECK
 
+#if defined(_DEBUG) && BUILD_LITE==1
+    int STARTUP_FLAG = 1;
+#define CHECK_STARTUP_STAGE \
+    if ( STARTUP_FLAG ) \
+        crFatalError(-123, "Cannot create global or static CREngine object")
+#else
+#define CHECK_STARTUP_STAGE
+#endif
+
 
 // memory allocation slice
 struct lstring_chunk_slice_t {
@@ -132,7 +141,8 @@ lstring_chunk_t * lstring_chunk_t::alloc()
     // alloc new slice
     if (slices_count >= MAX_SLICE_COUNT)
         crFatalError();
-    slices[slices_count++] = new lstring_chunk_slice_t( FIRST_SLICE_SIZE << (slices_count+1) );
+    lstring_chunk_slice_t * new_slice = new lstring_chunk_slice_t( FIRST_SLICE_SIZE << (slices_count+1) );
+    slices[slices_count++] = new_slice;
     return slices[slices_count-1]->alloc_chunk();
 }
 
@@ -398,6 +408,9 @@ int lStr_cmp(const lChar8 * dst, const lChar16 * src)
 
 void lString16::free()
 {
+    if ( pchunk==EMPTY_STR_16 )
+        return;
+    CHECK_STARTUP_STAGE;
     //assert(pchunk->buf16[pchunk->len]==0);
     ::free(pchunk->buf16);
 #if (LDOM_USE_OWN_MEM_MAN == 1)
@@ -427,6 +440,7 @@ void lString16::alloc(size_t sz)
 
 lString16::lString16(const lChar16 * str)
 {
+    CHECK_STARTUP_STAGE;
     if (!str || !(*str))
     {
         pchunk = EMPTY_STR_16;
@@ -441,6 +455,7 @@ lString16::lString16(const lChar16 * str)
 
 lString16::lString16(const lChar8 * str)
 {
+    CHECK_STARTUP_STAGE;
     if (!str || !(*str))
     {
         pchunk = EMPTY_STR_16;
@@ -455,6 +470,7 @@ lString16::lString16(const lChar8 * str)
 /// constructor from utf8 character array fragment
 lString16::lString16(const lChar8 * str, size_type count)
 {
+    CHECK_STARTUP_STAGE;
     if (!str || !(*str))
     {
         pchunk = EMPTY_STR_16;
@@ -469,6 +485,7 @@ lString16::lString16(const lChar8 * str, size_type count)
 
 lString16::lString16(const value_type * str, size_type count)
 {
+    CHECK_STARTUP_STAGE;
     if ( !str || !(*str) || count<=0 )
     {
         pchunk = EMPTY_STR_16; addref();
@@ -484,6 +501,7 @@ lString16::lString16(const value_type * str, size_type count)
 
 lString16::lString16(const lString16 & str, size_type offset, size_type count)
 {
+    CHECK_STARTUP_STAGE;
     if ( count > str.length() - offset )
         count = str.length() - offset;
     if (count<=0)
@@ -829,7 +847,7 @@ int lString16::atoi() const
     return n;
 }
 
-static int hexDigit( int c )
+int hexDigit( int c )
 {
     if ( c>='0' && c<='9')
         return c-'0';
@@ -1103,7 +1121,7 @@ bool lString16HashedCollection::deserialize( SerialBuf & buf )
     clear();
     int start = buf.pos();
     buf.putMagic( str_hash_magic );
-    lUInt32 count;
+    lUInt32 count = 0;
     buf >> count;
     for ( unsigned i=0; i<count; i++ ) {
         lString16 s;
@@ -1251,6 +1269,9 @@ const lString16 lString16::empty_str;
 
 void lString8::free()
 {
+    if ( pchunk==EMPTY_STR_8 )
+        return;
+    CHECK_STARTUP_STAGE;
     ::free(pchunk->buf8);
 #if (LDOM_USE_OWN_MEM_MAN == 1)
     for (int i=slices_count-1; i>=0; --i)
@@ -1279,6 +1300,7 @@ void lString8::alloc(size_t sz)
 
 lString8::lString8(const lChar8 * str)
 {
+    CHECK_STARTUP_STAGE;
     if (!str || !(*str))
     {
         pchunk = EMPTY_STR_8;
@@ -1293,6 +1315,7 @@ lString8::lString8(const lChar8 * str)
 
 lString8::lString8(const lChar16 * str)
 {
+    CHECK_STARTUP_STAGE;
     if (!str || !(*str))
     {
         pchunk = EMPTY_STR_8;
@@ -1322,6 +1345,7 @@ lString8::lString8(const value_type * str, size_type count)
 
 lString8::lString8(const lString8 & str, size_type offset, size_type count)
 {
+    CHECK_STARTUP_STAGE;
     if ( count > str.length() - offset )
         count = str.length() - offset;
     if (count<=0)
@@ -1785,7 +1809,7 @@ lString16 lString16::itoa( int n )
 // constructs string representation of integer
 lString16 lString16::itoa( lInt64 n )
 {
-    lChar16 buf[16];
+    lChar16 buf[32];
     int i=0;
     int negative = 0;
     if (n==0)
@@ -1795,7 +1819,7 @@ lString16 lString16::itoa( lInt64 n )
         negative = 1;
         n = -n;
     }
-    for ( ; n; n/=10 )
+    for ( ; n && i<30; n/=10 )
     {
         buf[i++] = (lChar16)('0' + (n%10));
     }
@@ -2928,7 +2952,7 @@ void CRLog::setLogLevel( CRLog::log_level level )
 {
     if ( !CRLOG )
         return;
-    warn( "Changing log level from %d to %d", CRLOG->curr_level, level );
+    warn( "Changing log level from %d to %d", (int)CRLOG->curr_level, (int)level );
     CRLOG->curr_level = level;
 }
 
@@ -3401,14 +3425,14 @@ SerialBuf & SerialBuf::operator >> ( lString8 & s8 )
 {
 	if ( check(2) )
 		return *this;
-	lUInt16 len;
+    lUInt16 len = 0;
 	(*this) >> len;
 	s8.clear();
 	s8.reserve(len);
 	for ( int i=0; i<len; i++ ) {
 		if ( check(1) )
 			return *this;
-		lUInt8 c;
+        lUInt8 c = 0;
 		(*this) >> c;
 		s8.append(1, c);
 	}
@@ -3558,3 +3582,20 @@ lString16 DecodeHTMLUrlString( lString16 s )
     }
     return s;
 }
+
+void limitStringSize(lString16 & str, int maxSize) {
+	if ((int) str.length() < maxSize)
+		return;
+	int lastSpace = -1;
+	for (int i = str.length() - 1; i > 0; i--)
+		if (str[i] == ' ') {
+			while (i > 0 && str[i - 1] == ' ')
+				i--;
+			lastSpace = i;
+			break;
+		}
+	int split = lastSpace > 0 ? lastSpace : maxSize;
+	str = str.substr(0, split);
+	str += L"...";
+}
+

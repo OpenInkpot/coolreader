@@ -53,6 +53,8 @@ const lChar16 * GetCharsetByte2UnicodeTableById( int id );
 const lChar8 ** GetCharsetUnicode2ByteTable( const lChar16 * encoding_name );
 /// get conversion table for upper 128 characters of codepage, by codepage number
 const lChar16 * GetCharsetByte2UnicodeTable( int codepage );
+/// returns "cp1251" for 1251, etc. for supported codepages
+const lChar16 * GetCharsetName( int codepage );
 /// convert language id to codepage number (MS)
 int langToCodepage( int lang );
 
@@ -67,6 +69,17 @@ int langToCodepage( int lang );
     \return non-zero on success
 */
 int AutodetectCodePage( const unsigned char * buf, int buf_size, char * cp_name, char * lang_name );
+/**
+    \brief Autodetects encoding of text data in buffer, only using ByteOrderMark or Utf-8 validity detection.
+
+    \param buf is buffer with text data to autodetect
+    \param buf_size is size of data in buffer, bytes
+    \param cp_name is buffer to store autodetected name of encoding, i.e. "utf-8", "windows-1251"
+    \param lang_name is buffer to store autodetected name of language, i.e. "en", "ru"
+
+    \return non-zero on success
+*/
+int AutodetectCodePageUtf( const unsigned char * buf, int buf_size, char * cp_name, char * lang_name );
 
 /**
     \brief checks whether data buffer is valid utf-8 stream

@@ -675,12 +675,12 @@ public:
         return LVERR_OK;
     }
 	
-	lverror_t OpenFile( lString16 fname, lvopen_mode_t mode, lvsize_t minSize = -1 )
+    lverror_t OpenFile( lString16 fname, lvopen_mode_t mode, lvsize_t minSize = (lvsize_t)-1 )
     {
         m_mode = mode;
         if ( mode!=LVOM_READ && mode!=LVOM_APPEND )
             return LVERR_FAIL; // not supported
-        if ( minSize==-1 ) {
+        if ( minSize==(lvsize_t)-1 ) {
             if ( !LVFileExists(fname) )
                 return LVERR_FAIL;
         }
@@ -1283,11 +1283,13 @@ public:
 #else
         m_fd = -1;
 
-        int flags = (mode==LVOM_READ) ? O_RDONLY : O_RDWR | O_CREAT | (use_sync ? O_SYNC : 0);
+        int flags = (mode==LVOM_READ) ? O_RDONLY : O_RDWR | O_CREAT | (use_sync ? O_SYNC : 0) | (mode==LVOM_WRITE ? O_TRUNC : 0);
         lString8 fn8 = UnicodeToUtf8(fname);
         m_fd = open( fn8.c_str(), flags, (mode_t)0666);
         if (m_fd == -1) {
+#ifndef ANDROID
             CRLog::error( "Error opening file %s for %s, errno=%d, msg=%s", fn8.c_str(), (mode==LVOM_READ) ? "reading" : "read/write",  (int)errno, strerror(errno) );
+#endif
             return LVERR_FAIL;
         }
         struct stat stat;
@@ -1318,6 +1320,19 @@ public:
     }
 };
 #endif
+
+/// tries to split full path name into archive name and file name inside archive using separator "@/" or "@\"
+bool LVSplitArcName( lString16 fullPathName, lString16 & arcPathName, lString16 & arcItemPathName )
+{
+    int p = fullPathName.pos(lString16("@/"));
+    if ( p<0 )
+        p = fullPathName.pos(lString16("@\\"));
+    if ( p<0 )
+        return false;
+    arcPathName = fullPathName.substr(0, p);
+    arcItemPathName = fullPathName.substr(p + 2);
+    return !arcPathName.empty() && !arcItemPathName.empty();
+}
 
 // facility functions
 LVStreamRef LVOpenFileStream( const lChar16 * pathname, int mode )
@@ -1735,7 +1750,7 @@ private:
         //if ( m_stream->SetPos( item->start )==(lvpos_t)(~0) )
         if ( m_stream->SetPos( item->start )!=(lvpos_t)item->start )
             return false;
-
+        int streamSize=m_stream->GetSize(); int bytesLeft = m_stream->GetSize() - m_stream->GetPos();
         lvsize_t bytesRead = 0;
         if ( m_stream->Read( item->buf, item->size, &bytesRead )!=LVERR_OK || bytesRead!=item->size )
             return false;
@@ -2055,8 +2070,10 @@ struct ZipHd2
 };
 #pragma pack(pop)
 
-#define ARC_INBUF_SIZE  8192
-#define ARC_OUTBUF_SIZE 16384
+//#define ARC_INBUF_SIZE  4096
+//#define ARC_OUTBUF_SIZE 16384
+#define ARC_INBUF_SIZE  5000
+#define ARC_OUTBUF_SIZE 10000
 
 #if (USE_ZLIB==1)
 
@@ -2146,8 +2163,10 @@ private:
             else
             {
                 //check CRC
-                if ( m_CRC != m_originalCRC )
+                if ( m_CRC != m_originalCRC ) {
+                    CRLog::error("ZIP stream '%s': CRC doesn't match", LCSTR(lString16(GetName())) );
                     return -1; // CRC error
+                }
             }
         }
         return m_zstream.avail_in;
@@ -2164,6 +2183,7 @@ private:
         // inbuf
         m_inbytesleft = m_packsize;
         m_zstream.next_in = m_inbuf;
+        m_zstream.avail_in = 0;
         fillInBuf();
         // outbuf
         m_zstream.next_out = m_outbuf;
@@ -2194,7 +2214,7 @@ private:
         if (in_bytes<0)
             return -1;
         // reserve space for output
-        if (m_decodedpos > ARC_OUTBUF_SIZE/2 || m_zstream.avail_out < ARC_OUTBUF_SIZE / 4 && m_outbytesleft > 0)
+        if (m_decodedpos > ARC_OUTBUF_SIZE/2 || (m_zstream.avail_out < ARC_OUTBUF_SIZE / 4 && m_outbytesleft > 0) )
         {
 
             int outpos = m_zstream.next_out - m_outbuf;
@@ -2271,18 +2291,20 @@ private:
                 return bytesRead;
             }
 
-            if (avail >= bytesToRead)
-                avail = bytesToRead;
+            int delta = avail;
+            if (delta > bytesToRead)
+                delta = bytesToRead;
+
 
             // copy data
             lUInt8 * src = m_outbuf + m_decodedpos;
-            for (int i=avail; i>0; --i)
+            for (int i=delta; i>0; --i)
                 *buf++ = *src++;
 
-            m_decodedpos += avail;
-            m_outbytesleft -= avail;
-            bytesRead += avail;
-            bytesToRead -= avail;
+            m_decodedpos += delta;
+            m_outbytesleft -= delta;
+            bytesRead += delta;
+            bytesToRead -= delta;
         }
         return bytesRead;
     }
@@ -2355,11 +2377,12 @@ public:
         int readBytes = read( (lUInt8 *)buf, (int)count );
         if ( readBytes<0 )
             return LVERR_FAIL;
-        if ( readBytes!=count ) {
+        if ( readBytes!=(int)count ) {
             CRLog::trace("ZIP stream: %d bytes read instead of %d", (int)readBytes, (int)count);
         }
         if (bytesRead)
             *bytesRead = (lvsize_t)readBytes;
+        //CRLog::trace("%d bytes requested, %d bytes read, %d bytes left", count, readBytes, m_outbytesleft);
         return LVERR_OK;
     }
     virtual lverror_t SetSize(lvsize_t)
@@ -2445,7 +2468,8 @@ public:
             stream->SetName(m_list[found_index]->GetName());
             // Use buffering?
             //return stream;
-            return LVCreateBufferedStream( stream, ZIP_STREAM_BUFFER_SIZE );
+            return stream;
+            //return LVCreateBufferedStream( stream, ZIP_STREAM_BUFFER_SIZE );
         }
         return stream;
     }
@@ -2579,16 +2603,22 @@ public:
                 break; //(GETARC_EOF);
             }
 
-            const int NM = 513;
+            //const int NM = 513;
+            const int NM = 4096;
+            if ( ZipHeader.NameLen>NM ) {
+                CRLog::error("ZIP entry name length is too big: %d", (int)ZipHeader.NameLen);
+                return 0;
+            }
             lUInt32 SizeToRead=(ZipHeader.NameLen<NM) ? ZipHeader.NameLen : NM;
-            char fnbuf[1025];
+            char fnbuf[NM+1];
             m_stream->Read( fnbuf, SizeToRead, &ReadSize);
 
             if (ReadSize!=SizeToRead) {
+                CRLog::error("error while reading zip entry name");
                 return 0;
             }
 
-            fnbuf[ZipHeader.NameLen]=0;
+            fnbuf[SizeToRead]=0;
 
             long SeekLen=ZipHeader.AddLen+ZipHeader.CommLen;
 
@@ -2611,6 +2641,14 @@ public:
 
             item->SetItemInfo(fName.c_str(), ZipHeader.UnpSize, (ZipHeader.getAttr() & 0x3f));
             item->SetSrc( ZipHeader.getOffset(), ZipHeader.PackSize, ZipHeader.Method );
+
+//#define DUMP_ZIP_HEADERS
+#ifdef DUMP_ZIP_HEADERS
+            CRLog::trace("ZIP entry '%s' unpSz=%d, pSz=%d, m=%x, offs=%x, zAttr=%x, flg=%x", LCSTR(fName), (int)ZipHeader.UnpSize, (int)ZipHeader.PackSize, (int)ZipHeader.Method, (int)ZipHeader.getOffset(), (int)ZipHeader.getZIPAttr(), (int)ZipHeader.getAttr());
+            //, addL=%d, commL=%d, dn=%d
+            //, (int)ZipHeader.AddLen, (int)ZipHeader.CommLen, (int)ZipHeader.DiskNum
+#endif
+
             m_list.add(item);
         }
         int sz2 = m_list.length();
@@ -3376,7 +3414,16 @@ public:
 		}
 		return LVERR_OK;
 	}
-	virtual lverror_t GetSize( lvsize_t * pSize )
+    virtual lvsize_t  GetSize()
+    {
+        if (!m_pBuffer)
+            return (lvsize_t)(-1);
+        if (m_size<m_pos)
+            m_size = m_pos;
+        return m_size;
+    }
+
+    virtual lverror_t GetSize( lvsize_t * pSize )
 	{
 		if (!m_pBuffer || !pSize)
 			return LVERR_FAIL;
@@ -3486,12 +3533,12 @@ public:
 		m_bufsize = sz;
 		m_size = 0;
 		m_pos = 0;
-		m_pBuffer = new lUInt8[(int)m_bufsize];
+		m_pBuffer = (lUInt8*)malloc((int)m_bufsize);
 		if (m_pBuffer) {
             lvsize_t bytesRead = 0;
             srcStream->Read( m_pBuffer, m_bufsize, &bytesRead );
             if ( bytesRead!=m_bufsize ) {
-                delete m_pBuffer;
+                free(m_pBuffer);
                 m_pBuffer = 0;
                 m_size = 0;
                 m_pos = 0;
@@ -3511,7 +3558,7 @@ public:
 		Close();
 		m_bufsize = size;
 		m_pos = 0;
-		m_pBuffer = new lUInt8[(int)m_bufsize];
+		m_pBuffer = (lUInt8*) malloc((int)m_bufsize);
 		if (m_pBuffer) {
 			memcpy( m_pBuffer, pBuf, (int)size );
 		}
@@ -3624,14 +3671,24 @@ lvsize_t LVPumpStream( LVStreamRef out, LVStreamRef in )
 
 lvsize_t LVPumpStream( LVStream * out, LVStream * in )
 {
-    char buf[4096];
+    char buf[5000];
     lvsize_t totalBytesRead = 0;
     lvsize_t bytesRead = 0;
     in->SetPos(0);
-    while ( in->Read( buf, 4096, &bytesRead )==LVERR_OK && bytesRead>0 )
+    lvsize_t bytesToRead = in->GetSize();
+    while ( bytesToRead>0 )
     {
+        int blockSize = 5000;
+        if (blockSize > bytesToRead)
+            blockSize = bytesToRead;
+        bytesRead = 0;
+        if ( in->Read( buf, blockSize, &bytesRead )!=LVERR_OK )
+            break;
+        if ( !bytesRead )
+            break;
         out->Write( buf, bytesRead, NULL );
         totalBytesRead += bytesRead;
+        bytesToRead -= bytesRead;
     }
     return totalBytesRead;
 }
@@ -3971,7 +4028,7 @@ LVStreamRef LVCreateTCRDecoderStream( LVStreamRef stream )
 }
 
 /// returns path part of pathname (appended with / or \ delimiter)
-lString16 LVExtractPath( lString16 pathName )
+lString16 LVExtractPath( lString16 pathName, bool appendEmptyPath )
 {
     int last_delim_pos = -1;
     for ( unsigned i=0; i<pathName.length(); i++ )
@@ -3979,9 +4036,9 @@ lString16 LVExtractPath( lString16 pathName )
             last_delim_pos = i;
     if ( last_delim_pos==-1 )
 #ifdef _LINUX
-        return lString16(L"./");
+        return lString16(appendEmptyPath ? L"./" : L"");
 #else
-        return lString16(L".\\");
+        return lString16(appendEmptyPath ? L".\\" : L"");
 #endif
     return pathName.substr( 0, last_delim_pos+1 );
 }
@@ -4337,7 +4394,7 @@ class LVBlockWriteStream : public LVNamedStream
                 lUInt8 ch2 = ptr[i];
                 if ( pos+i>block_end || ch1!=ch2 ) {
                     buf[offset+i] = ptr[i];
-                    if ( modified_start==-1 )
+                    if ( modified_start==(lvpos_t)-1 )
                         modified_start = modified_end = pos + i;
                     else {
                         if ( modified_start>pos+i )

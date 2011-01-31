@@ -67,6 +67,10 @@ void lStr_lowercase( lChar16 * str, int len );
 /// calculates CRC32 for buffer contents
 lUInt32 lStr_crc32( lUInt32 prevValue, const void * buf, int size );
 
+// returns 0..15 if c is hex digit, -1 otherwise
+int hexDigit( int c );
+
+
 #define CH_PROP_UPPER       0x0001 ///< uppercase alpha character flag
 #define CH_PROP_LOWER       0x0002 ///< lowercase alpha character flag
 #define CH_PROP_ALPHA       0x0003 ///< alpha flag is combination of uppercase and lowercase flags
@@ -768,6 +772,8 @@ lString16 Utf8ToUnicode( const char * s );
 lString16 Utf8ToUnicode( const char * s, int sz );
 /// decodes path like "file%20name" to "file name"
 lString16 DecodeHTMLUrlString( lString16 s );
+/// truncates string by specified size, appends ... if truncated, prefers to wrap whole words
+void limitStringSize(lString16 & str, int maxSize);
 
 #define LCSTR(x) (UnicodeToUtf8(x).c_str())
 bool splitIntegerList( lString16 s, lString16 delim, int & value1, int & value2 );

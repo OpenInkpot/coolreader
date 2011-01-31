@@ -18,6 +18,8 @@
 #include "../include/fb2def.h"
 #include "../include/lvstream.h"
 
+// define to dump all tokens
+//#define DUMP_CSS_PARSING
 
 enum css_decl_code {
     cssd_unknown,
@@ -176,6 +178,9 @@ static css_decl_code parse_property_name( const char * & res )
             // found!
             skip_spaces(str);
             if ( substr_compare( ":", str )) {
+#ifdef DUMP_CSS_PARSING
+                CRLog::trace("property name: %s", lString8(res, str-res).c_str() );
+#endif
                 skip_spaces(str);
                 res = str;
                 return (css_decl_code)i;
@@ -495,6 +500,7 @@ static const char * css_lsp_names[] =
     "outside",
     NULL
 };
+
 
 bool LVCssDeclaration::parse( const char * &decl )
 {
@@ -875,10 +881,17 @@ bool LVCssSelectorRule::check( const ldomNode * & node )
         //
         {
             int index = node->getNodeIndex();
-            if (index<=0)
-                return false;
-            node = node->getParentNode()->getChildNode(index-1);
-            return (node->getNodeId()==_id);
+            // while
+            if (index>0) {
+                ldomNode * elem = node->getParentNode()->getChildElementNode(index-1, _id);
+                if ( elem ) {
+                    node = elem;
+                    //CRLog::trace("+ selector: found pred element");
+                    return true;
+                }
+                //index--;
+            }
+            return false;
         }
         break;
     case cssrt_attrset:       // E[foo]
@@ -894,6 +907,7 @@ bool LVCssSelectorRule::check( const ldomNode * & node )
             bool res = (val == _value);
             //if ( res )
             //    return true;
+            //CRLog::trace("attreq: %s %s", LCSTR(val), LCSTR(_value) );
             return res;
         }
         break;
@@ -933,8 +947,10 @@ bool LVCssSelectorRule::check( const ldomNode * & node )
         // todo
         {
             lString16 val = node->getAttributeValue(attr_class);
-            if (_value.length()>val.length())
-                return false;
+            val.lowercase();
+//            if ( val.length() != _value.length() )
+//                return false;
+            //CRLog::trace("attr_class: %s %s", LCSTR(val), LCSTR(_value) );
             return val == _value;
         }
         break;
@@ -1019,6 +1035,7 @@ LVCssSelectorRule * parse_attr( const char * &str, lxmlDocBase * doc )
         skip_spaces( str );
         LVCssSelectorRule * rule = new LVCssSelectorRule(cssrt_class);
         lString16 s( attrvalue );
+        s.lowercase();
         rule->setAttr(attr_class, s);
         return rule;
     } else if ( *str=='#' ) {
@@ -1106,6 +1123,10 @@ bool LVCssSelector::parse( const char * &str, lxmlDocBase * doc )
             skip_spaces( str );
             _id = 0;
         } 
+        else if ( *str == '.' ) // classname follows
+        {
+            _id = 0;
+        }
         else if ( css_is_alpha( *str ) )
         {
             // ident

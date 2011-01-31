@@ -400,7 +400,7 @@ public:
                 }
                 callback->OnLineDecoded(this, i, row);
             }
-            delete row;
+            delete[] row;
             callback->OnEndDecode(this, false);
         }
         return true;
@@ -579,6 +579,7 @@ public:
 
             if ( callback )
             {
+                callback->OnStartDecode(this);
                 /* Step 4: set parameters for decompression */
 
                 /* In this example, we don't need to change any of the defaults set by
@@ -616,6 +617,7 @@ public:
                     }
                     callback->OnLineDecoded( this, y, row );
                 }
+                callback->OnEndDecode(this, true);
             }
 
         if ( buffer )
@@ -872,7 +874,7 @@ public:
             }
             callback->OnLineDecoded( m_pImage, i, line );
         }
-        delete line;
+        delete[] line;
         callback->OnEndDecode( m_pImage, false );
     }
 };
@@ -967,14 +969,14 @@ void LVGifImageSource::Clear()
     m_version = 0;
     m_bpp = 0;
     if (m_global_color_table) {
-        delete m_global_color_table;
+        delete[] m_global_color_table;
         m_global_color_table = NULL;
     }
     if (m_frame_count) {
         for (int i=0; i<m_frame_count; i++) {
             delete m_frames[i];
         }
-        delete m_frames;
+        delete m_frames;//Looks like the delete[] operator should be used
         m_frames = NULL;
         m_frame_count = 0;
     }
@@ -1211,7 +1213,7 @@ bool LVGifImageSource::Decode( LVImageDecoderCallback * callback )
     if ( _stream->Read( buf, sz, &bytesRead )!=LVERR_OK || bytesRead!=sz )
         res = false;
     res = res && DecodeFromBuffer( buf, sz, callback );
-    delete buf;
+    delete[] buf;
     return res;
 }
 
@@ -1315,12 +1317,12 @@ int LVGifFrame::DecodeFromBuffer( unsigned char * buf, int buf_size, int &bytes_
         res = 1;
     } else {
         // error
-        delete m_buffer;
+        delete[] m_buffer;
         m_buffer = NULL;
     }
 
     // cleanup
-    delete stream_buffer;
+    delete[] stream_buffer;
 
     return res; // OK
 }
@@ -1344,11 +1346,11 @@ LVGifFrame::~LVGifFrame()
 void LVGifFrame::Clear()
 {
     if (m_buffer) {
-        delete m_buffer;
+        delete[] m_buffer;
         m_buffer = NULL;
     }
     if (m_local_color_table) {
-        delete m_local_color_table;
+        delete[] m_local_color_table;
         m_local_color_table = NULL;
     }
 }
@@ -1470,7 +1472,13 @@ public:
 		, _split_x( splitX )
 		, _split_y( splitY )
 	{
-		if ( _split_x<0 || _split_x>=_src_dx )
+        if ( _hTransform == IMG_TRANSFORM_TILE )
+            if ( _split_x>=_src_dx )
+                _split_x %=_src_dx;
+        if ( _vTransform == IMG_TRANSFORM_TILE )
+            if ( _split_y>=_src_dy )
+                _split_y %=_src_dy;
+        if ( _split_x<0 || _split_x>=_src_dx )
 			_split_x = _src_dx / 2;
 		if ( _split_y<0 || _split_y>=_src_dy )
 			_split_y = _src_dy / 2;
@@ -1478,12 +1486,14 @@ public:
     virtual void OnStartDecode( LVImageSource * )
 	{
 		_line.reserve( _dst_dx );
+        _callback->OnStartDecode(this);
 	}
     virtual bool OnLineDecoded( LVImageSource * obj, int y, lUInt32 * data );
-    virtual void OnEndDecode( LVImageSource *, bool )
+    virtual void OnEndDecode( LVImageSource *, bool res)
 	{
 		_line.clear();
-	}
+        _callback->OnEndDecode(this, res);
+    }
 	virtual ldomNode * GetSourceNode() { return NULL; }
 	virtual LVStream * GetSourceStream() { return NULL; }
 	virtual void   Compact() { }
@@ -1535,8 +1545,9 @@ bool LVStretchImgSource::OnLineDecoded( LVImageSource * obj, int y, lUInt32 * da
         break;
     case IMG_TRANSFORM_TILE:
         {
+            int offset = _src_dx - _split_x;
             for ( int x=0; x<_dst_dx; x++ )
-                _line[x] = data[x % _src_dx];
+                _line[x] = data[ (x + offset) % _src_dx];
         }
         break;
     }
@@ -1573,7 +1584,9 @@ bool LVStretchImgSource::OnLineDecoded( LVImageSource * obj, int y, lUInt32 * da
         break;
     case IMG_TRANSFORM_TILE:
         {
-            for ( int yy=y; yy<_dst_dy; yy+=_src_dy ) {
+            int offset = _src_dy - _split_y;
+            int y0 = (y + offset) % _src_dy;
+            for ( int yy=y0; yy<_dst_dy; yy+=_src_dy ) {
                 res = _callback->OnLineDecoded( obj, yy, _line.get() );
             }
         }
@@ -1591,24 +1604,39 @@ LVImageSourceRef LVCreateStretchFilledTransform( LVImageSourceRef src, int newWi
     return LVImageSourceRef( new LVStretchImgSource( src, newWidth, newHeight, hTransform, vTransform, splitX, splitY ) );
 }
 
+/// creates image which fills area with tiled copy
+LVImageSourceRef LVCreateTileTransform( LVImageSourceRef src, int newWidth, int newHeight, int offsetX, int offsetY )
+{
+    if ( src.isNull() )
+        return LVImageSourceRef();
+    return LVImageSourceRef( new LVStretchImgSource( src, newWidth, newHeight, IMG_TRANSFORM_TILE, IMG_TRANSFORM_TILE,
+                                                     offsetX, offsetY ) );
+}
+
 class LVUnpackedImgSource : public LVImageSource, public LVImageDecoderCallback
 {
 protected:
     bool _isGray;
+    int _bpp;
     lUInt8 * _grayImage;
     lUInt32 * _colorImage;
+    lUInt16 * _colorImage16;
     int _dx;
     int _dy;
 public:
-    LVUnpackedImgSource( LVImageSourceRef src, bool storeGray )
-        : _isGray(storeGray)
+    LVUnpackedImgSource( LVImageSourceRef src, int bpp )
+        : _isGray(bpp<=8)
+        , _bpp(bpp)
         , _grayImage(NULL)
         , _colorImage(NULL)
+        , _colorImage16(NULL)
         , _dx( src->GetWidth() )
         , _dy( src->GetHeight() )
     {
-        if ( _isGray ) {
+        if ( bpp<=8  ) {
             _grayImage = (lUInt8*)malloc( _dx * _dy * sizeof(lUInt8) );
+        } else if ( bpp==16 ) {
+            _colorImage16 = (lUInt16*)malloc( _dx * _dy * sizeof(lUInt16) );
         } else {
             _colorImage = (lUInt32*)malloc( _dx * _dy * sizeof(lUInt32) );
         }
@@ -1643,6 +1671,11 @@ public:
             for ( int x=0; x<_dx; x++ ) {
                 dst[x] = grayPack( data[x] );
             }
+        } else if ( _bpp==16 ) {
+            lUInt16 * dst = _colorImage16 + _dx * y;
+            for ( int x=0; x<_dx; x++ ) {
+                dst[x] = rgb888to565( data[x] );
+            }
         } else {
             lUInt32 * dst = _colorImage + _dx * y;
             memcpy( dst, data, sizeof(lUInt32) * _dx );
@@ -1674,6 +1707,18 @@ public:
                 callback->OnLineDecoded( this, y, dst );
             }
             line.clear();
+        } else if ( _bpp==16 ) {
+            // 16bit
+            LVArray<lUInt32> line;
+            line.reserve( _dx );
+            for ( int y=0; y<_dy; y++ ) {
+                lUInt16 * src = _colorImage16 + _dx * y;
+                lUInt32 * dst = line.ptr();
+                for ( int x=0; x<_dx; x++ )
+                    dst[x] = rgb565to888( src[x] );
+                callback->OnLineDecoded( this, y, dst );
+            }
+            line.clear();
         } else {
             // color
             for ( int y=0; y<_dy; y++ ) {
@@ -1689,6 +1734,58 @@ public:
             free( _grayImage );
         if ( _colorImage )
             free( _colorImage );
+        if ( _colorImage )
+            free( _colorImage16 );
+    }
+};
+
+class LVDrawBufImgSource : public LVImageSource
+{
+protected:
+    LVColorDrawBuf * _buf;
+    bool _own;
+    int _dx;
+    int _dy;
+public:
+    LVDrawBufImgSource( LVColorDrawBuf * buf, bool own )
+        : _buf(buf)
+        , _own(own)
+        , _dx( buf->GetWidth() )
+        , _dy( buf->GetHeight() )
+    {
+    }
+    virtual ldomNode * GetSourceNode() { return NULL; }
+    virtual LVStream * GetSourceStream() { return NULL; }
+    virtual void   Compact() { }
+    virtual int    GetWidth() { return _dx; }
+    virtual int    GetHeight() { return _dy; }
+    virtual bool   Decode( LVImageDecoderCallback * callback )
+    {
+        callback->OnStartDecode( this );
+        bool res = false;
+        if ( _buf->GetBitsPerPixel()==32 ) {
+            // 32 bpp
+            for ( int y=0; y<_dy; y++ ) {
+                res = callback->OnLineDecoded( this, y, (lUInt32 *)_buf->GetScanLine(y) );
+            }
+        } else {
+            // 16 bpp
+            lUInt32 * row = new lUInt32[_dx];
+            for ( int y=0; y<_dy; y++ ) {
+                lUInt16 * src = (lUInt16 *)_buf->GetScanLine(y);
+                for ( int x=0; x<_dx; x++ )
+                    row[x] = rgb565to888(src[x]);
+                res = callback->OnLineDecoded( this, y, row );
+            }
+            delete[] row;
+        }
+        callback->OnEndDecode( this, false );
+        return true;
+    }
+    virtual ~LVDrawBufImgSource()
+    {
+        if ( _own )
+            delete _buf;
     }
 };
 
@@ -1702,10 +1799,31 @@ LVImageSourceRef LVCreateUnpackedImageSource( LVImageSourceRef srcImage, int max
     int sz = dx*dy * (gray?1:4);
     if ( sz>maxSize )
         return srcImage;
-    //CRLog::trace("Unpacking image %dx%d (%d)", dx, dy, sz);
-    LVUnpackedImgSource * img = new LVUnpackedImgSource( srcImage, gray );
-    //CRLog::trace("Unpacking done");
+    CRLog::trace("Unpacking image %dx%d (%d)", dx, dy, sz);
+    LVUnpackedImgSource * img = new LVUnpackedImgSource( srcImage, gray ? 8 : 32 );
+    CRLog::trace("Unpacking done");
     return LVImageSourceRef( img );
+}
+
+/// creates decoded memory copy of image, if it's unpacked size is less than maxSize
+LVImageSourceRef LVCreateUnpackedImageSource( LVImageSourceRef srcImage, int maxSize, int bpp )
+{
+    if ( srcImage.isNull() )
+        return srcImage;
+    int dx = srcImage->GetWidth();
+    int dy = srcImage->GetHeight();
+    int sz = dx*dy * (bpp>>3);
+    if ( sz>maxSize )
+        return srcImage;
+    CRLog::trace("Unpacking image %dx%d (%d)", dx, dy, sz);
+    LVUnpackedImgSource * img = new LVUnpackedImgSource( srcImage, bpp );
+    CRLog::trace("Unpacking done");
+    return LVImageSourceRef( img );
+}
+
+LVImageSourceRef LVCreateDrawBufImageSource( LVColorDrawBuf * buf, bool own )
+{
+    return LVImageSourceRef( new LVDrawBufImgSource( buf, own ) );
 }
 
 
@@ -1762,8 +1880,9 @@ void LVDrawBatteryIcon( LVDrawBuf * drawbuf, const lvRect & batteryRc, int perce
         int y = (rc.top + rc.bottom - h)/2+1;
         lUInt32 bgcolor = drawbuf->GetBackgroundColor();
         lUInt32 textcolor = drawbuf->GetTextColor();
-        drawbuf->SetBackgroundColor( bgcolor );
-        drawbuf->SetTextColor( textcolor );
+
+        drawbuf->SetBackgroundColor( textcolor );
+        drawbuf->SetTextColor( bgcolor );
         font->DrawTextString(drawbuf, x-1, y, txt.c_str(), txt.length(), '?', NULL);
         font->DrawTextString(drawbuf, x+1, y, txt.c_str(), txt.length(), '?', NULL);
 //        font->DrawTextString(drawbuf, x-1, y+1, txt.c_str(), txt.length(), '?', NULL);
@@ -1774,8 +1893,8 @@ void LVDrawBatteryIcon( LVDrawBuf * drawbuf, const lvRect & batteryRc, int perce
 //        font->DrawTextString(drawbuf, x-1, y+1, txt.c_str(), txt.length(), '?', NULL);
         //drawbuf->SetBackgroundColor( textcolor );
         //drawbuf->SetTextColor( bgcolor );
-        drawbuf->SetBackgroundColor( textcolor );
-        drawbuf->SetTextColor( bgcolor );
+        drawbuf->SetBackgroundColor( bgcolor );
+        drawbuf->SetTextColor( textcolor );
         font->DrawTextString(drawbuf, x, y, txt.c_str(), txt.length(), '?', NULL);
     }
 }
