@@ -1,3 +1,27 @@
+cr3 (3.0.43-11) zelazny; urgency=low
+
+  [ Vadim Lopatin ]
+  * Qt: fix translation
+  * Android: fullscreen for Archos
+  * Android: Bookmark list rework
+  * Andoid: bookmarks dialog reworked, export implemented
+  * fix EPUB crash
+  * LBook: fix battery in status bar
+  * Android: update version
+  * Android: disable Archos snsor key hiding
+  * Android: fix backlight brightness switch on Night->Day mode change
+  * rollback page splitter changes
+  * update cache file verions, to reformat:
+  * LT translation for Android and LBoook, by Stanislovas Zacharovas
+  * Android: more backlight levels
+  * OTF and Type1 fonts support, TrueType: use unpatented hinting
+    instead of bytecode interpretor
+  * update Russian hyphenation dictionary
+  * turn off unpatented hinting
+  * fix hyphenation
+
+ -- Alexander Kerner <lunohod@openinkpot.org>  Mon, 07 Feb 2011 16:08:15 +0100
+
 cr3 (3.0.43-2) zelazny; urgency=low
 
   [ Vadim Lopatin ]
