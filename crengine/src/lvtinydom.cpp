@@ -12,7 +12,7 @@
 *******************************************************/
 
 /// change in case of incompatible changes in swap/cache file format
-#define CACHE_FILE_FORMAT_VERSION "3.03.04"
+#define CACHE_FILE_FORMAT_VERSION "3.03.06"
 
 #ifndef DOC_DATA_COMPRESSION_LEVEL
 /// data compression level (0=no compression, 1=fast compressions, 3=normal compression)
@@ -8539,7 +8539,7 @@ lString16 ldomNode::getText( lChar16 blockDelimiter, int maxSize ) const
                     break;
 #if BUILD_LITE!=1
                 if ( blockDelimiter && child->isElement() ) {
-                    if ( child->getStyle()->display == css_d_block )
+                    if ( !child->getStyle().isNull() && child->getStyle()->display == css_d_block )
                         txt << blockDelimiter;
                 }
 #endif
