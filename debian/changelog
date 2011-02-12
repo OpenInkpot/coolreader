@@ -1,3 +1,36 @@
+cr3 (3.0.43-12) zelazny; urgency=low
+
+  [ Vadim Lopatin ]
+  * Debian: update changelog
+  * Fixes for Debian package
+  * debian/copyright: add antiword and chmlib licensing information
+  * fix spelling error in Qt version
+  * fix watch file
+  * Debian: install upstream changelog
+  * fixes:
+  * Debian: SF redirector
+  * Debian: use max compression for changelog
+  * debian/copyright: add common-license paths
+  * remove empty directories docs and skins from Qt installation
+  * Fix HTML encoding detection
+  * pocketbook: add toolchain
+  * Fix line-height: #em support
+  * update readme for Qt build
+  * Qt: support options --help, --version, --loglevel=, --logfile=
+  * call OnLoadFileEnd after reopening from cache, support EPUB
+    caverpage image stream
+  * OpenInkpot: add coverpage image to window properties, for bookshelf
+  * Android: support scanning of Epub properties
+  * Android: recursive scanning support
+  * Android: new browser menu action: scanning directory book properties
+    recursive
+  * Android: fix directory scanning
+  * Android: add book search dialog
+  * Android: implement DB search
+  * Android: show search results
+
+ -- Alexander Kerner <lunohod@openinkpot.org>  Sat, 12 Feb 2011 10:39:00 +0100
+
 cr3 (3.0.43-11) zelazny; urgency=low
 
   [ Vadim Lopatin ]
