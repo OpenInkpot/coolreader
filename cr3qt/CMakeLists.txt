@@ -92,19 +92,28 @@ SET (man ${CMAKE_CURRENT_SOURCE_DIR}/data/docs/cr3.1)
 SET (man_gz ${CMAKE_BINARY_DIR}/cr3.1.gz)
 
 ADD_CUSTOM_COMMAND(OUTPUT ${man_gz}
-   COMMAND ${GZIP_TOOL} -c ${man} > ${man_gz}
+   COMMAND ${GZIP_TOOL} -9 -c ${man} > ${man_gz}
    DEPENDS ${man}
    COMMENT "Building ${man_gz}")
 
+SET (changelog ${CMAKE_CURRENT_SOURCE_DIR}/../changelog)
+SET (changelog_gz ${CMAKE_BINARY_DIR}/changelog.gz)
+ADD_CUSTOM_COMMAND(OUTPUT ${changelog_gz}
+   COMMAND ${GZIP_TOOL} -9 -c ${changelog} > ${changelog_gz}
+   DEPENDS ${changelog}
+   COMMENT "Building ${changelog_gz}")
+
 SET (CR3_MAN_PAGES ${man_gz})
+SET (CR3_CHANGELOG ${changelog_gz})
 
 ELSE()
 SET (CR3_MAN_PAGES)
+SET (CR3_CHANGELOG)
 
 ENDIF(UNIX)
 
 
-ADD_EXECUTABLE(cr3 ${CR3_MAN_PAGES} ${CR3_SOURCES} ${CR3_RCS} ${CR3_UI_HDRS} ${CR3_MOC_SRCS} ${QM_FILES})
+ADD_EXECUTABLE(cr3 ${CR3_MAN_PAGES} ${CR3_CHANGELOG} ${CR3_SOURCES} ${CR3_RCS} ${CR3_UI_HDRS} ${CR3_MOC_SRCS} ${QM_FILES})
 
 if(WIN32)
 if(CMAKE_GENERATOR MATCHES "Visual Studio*")
@@ -138,14 +147,16 @@ INSTALL(FILES ${man_gz}
 
 INSTALL( TARGETS cr3 RUNTIME DESTINATION bin )
 INSTALL( DIRECTORY data/ DESTINATION share/cr3 
-   FILES_MATCHING PATTERN "*.css" )
+   FILES_MATCHING PATTERN "*.css" PATTERN "skins" EXCLUDE PATTERN "docs" EXCLUDE)
 INSTALL( DIRECTORY data/hyph DESTINATION share/cr3 
    FILES_MATCHING PATTERN "*.pdb" )
 INSTALL( DIRECTORY data/hyph DESTINATION share/cr3 
    FILES_MATCHING PATTERN "*.pattern" )
-INSTALL( DIRECTORY data/skins DESTINATION share/cr3/skins )
+#INSTALL( DIRECTORY data/skins DESTINATION share/cr3/skins )
 INSTALL( DIRECTORY data/textures DESTINATION share/cr3/textures )
 INSTALL( DIRECTORY data/backgrounds DESTINATION share/cr3/backgrounds )
+#INSTALL( FILES ${CR3_MAN_PAGES} DESTINATION share/doc/cr3 )
+INSTALL( FILES ${CR3_CHANGELOG} DESTINATION share/doc/cr3 )
 INSTALL( FILES ${QM_FILES} DESTINATION share/cr3/i18n )
 INSTALL( FILES src/desktop/cr3.desktop DESTINATION share/applications )
 INSTALL( FILES src/desktop/cr3.png DESTINATION share/pixmaps )
@@ -160,7 +171,7 @@ INSTALL( DIRECTORY data/hyph DESTINATION .
    FILES_MATCHING PATTERN "*.pdb" )
 INSTALL( DIRECTORY data/hyph DESTINATION . 
    FILES_MATCHING PATTERN "*.pattern" )
-INSTALL( DIRECTORY data/skins DESTINATION . )
+#INSTALL( DIRECTORY data/skins DESTINATION . )
 INSTALL( FILES ${QM_FILES} DESTINATION i18n )
 
 ENDIF(UNIX)

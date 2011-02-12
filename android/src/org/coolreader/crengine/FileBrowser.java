@@ -10,6 +10,8 @@ import java.util.TimeZone;
 import org.coolreader.CoolReader;
 import org.coolreader.R;
 
+import android.content.DialogInterface;
+import android.content.DialogInterface.OnCancelListener;
 import android.database.DataSetObserver;
 import android.graphics.drawable.Drawable;
 import android.util.Log;
@@ -325,6 +327,28 @@ public class FileBrowser extends ListView {
 			showDirectory(currDirectory, null);
 	}
 
+	public void showSearchResult( FileInfo[] books ) {
+		FileInfo dir = mScanner.setSearchResults( books );
+		showDirectory(dir, null);
+	}
+	
+	public void showFindBookDialog()
+	{
+		BookSearchDialog dlg = new BookSearchDialog( mActivity, new BookSearchDialog.SearchCallback() {
+			@Override
+			public void done(FileInfo[] results) {
+				if ( results!=null ) {
+					if ( results.length==0 ) {
+						mActivity.showToast(R.string.dlg_book_search_not_found);
+					} else {
+						showSearchResult( results );
+					}
+				}
+			}
+		});
+		dlg.show();
+	}
+
 	public void showRootDirectory()
 	{
 		showDirectory(mScanner.getRoot(), null);
@@ -408,9 +432,34 @@ public class FileBrowser extends ListView {
 						dir.sort(mSortOrder);
 					showDirectoryInternal(dir, file);
 				}
-			});
+			}, false, new Scanner.ScanControl() );
 		} else
 			showDirectoryInternal(dir, file);
+	}
+	
+	public void scanCurrentDirectoryRecursive() {
+		if ( currDirectory==null )
+			return;
+		Log.i("cr3", "scanCurrentDirectoryRecursive started");
+		final Scanner.ScanControl control = new Scanner.ScanControl(); 
+		final ProgressDialog dlg = ProgressDialog.show(getContext(), 
+				mActivity.getString(R.string.dlg_scan_title), 
+				mActivity.getString(R.string.dlg_scan_message),
+				true, true, new OnCancelListener() {
+					@Override
+					public void onCancel(DialogInterface dialog) {
+						Log.i("cr3", "scanCurrentDirectoryRecursive : stop handler");
+						control.stop();
+					}
+		});
+		mScanner.scanDirectory(currDirectory, new Runnable() {
+			@Override
+			public void run() {
+				Log.i("cr3", "scanCurrentDirectoryRecursive : finish handler");
+				if ( dlg.isShowing() )
+					dlg.dismiss();
+			}
+		}, true, control); 
 	}
 
 	private void showDirectoryInternal( final FileInfo dir, final FileInfo file )
