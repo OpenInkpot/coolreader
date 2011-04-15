@@ -42,3 +42,12 @@ Conflicts: cr3-settings
 Replaces: cr3-settings
 Description: N516 specific settings
  This package provides N516 specific settings.
+
+Package: cr3-settings-eb600
+Architecture: all
+Depends: cr3
+Provides: cr3-settings
+Conflicts: cr3-settings
+Replaces: cr3-settings
+Description: EB600 specific settings
+ This package provides EB600 specific settings.
