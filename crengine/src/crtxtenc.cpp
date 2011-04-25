@@ -1544,6 +1544,7 @@ int AutodetectCodePage( const unsigned char * buf, int buf_size, char * cp_name,
    }
    strcpy(cp_name, cp_stat_table[bestn].cp_name);
    strcpy(lang_name, cp_stat_table[bestn].lang_name);
+   CRLog::debug("Detected codepage:%s lang:%s", cp_name, lang_name);
    return 1;
 }
 void MakeStatsForFile( const char * fname, const char * cp_name, const char * lang_name, int index, FILE * f, lString8 & list )
@@ -1584,6 +1585,6 @@ void MakeStatsForFile( const char * fname, const char * cp_name, const char * la
    sprintf(str, "{ch_stat_%s_%s%d,dbl_ch_stat_%s_%s%d,\"%s\",\"%s\"}, \n", cp_name, lang_name, index, cp_name, lang_name, index, cp_name, lang_name );
    list += str;
    fprintf(f, "};\n\n" );
-   delete buf;
+   delete [] buf;
    fclose(in);
 }

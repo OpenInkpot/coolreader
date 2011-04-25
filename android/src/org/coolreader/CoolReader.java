@@ -85,6 +85,10 @@ public class CoolReader extends Activity
 		return mEngine;
 	}
 	
+	public FileBrowser getBrowser() {
+		return mBrowser;
+	}
+	
 	public ReaderView getReaderView() 
 	{
 		return mReaderView;
@@ -345,8 +349,6 @@ public class CoolReader extends Activity
 			backlight = -1;
 		setScreenBacklightLevel(backlight);
 		
-
-		
 		// testing background thread
     	mBackgroundThread = BackgroundThread.instance();
 		mFrame = new FrameLayout(this);
@@ -392,6 +394,7 @@ public class CoolReader extends Activity
 		showView(mBrowser, false);
         Log.i("cr3", "initializing reader");
         mBrowser.setSortOrder( props.getProperty(ReaderView.PROP_APP_BOOK_SORT_ORDER));
+		mBrowser.setSimpleViewMode(props.getBool(ReaderView.PROP_APP_FILE_BROWSER_SIMPLE_MODE, false));
         mBrowser.showDirectory(mScanner.getRoot(), null);
         
         fileToLoadOnStart = null;
@@ -582,6 +585,7 @@ public class CoolReader extends Activity
 	@Override
 	protected void onPause() {
 		Log.i("cr3", "CoolReader.onPause() : saving reader state");
+		mIsStarted = false;
 		mPaused = true;
 		releaseBacklightControl();
 		mReaderView.save();
@@ -623,6 +627,7 @@ public class CoolReader extends Activity
 	protected void onResume() {
 		Log.i("cr3", "CoolReader.onResume()");
 		mPaused = false;
+		mIsStarted = true;
 		super.onResume();
 	}
 
@@ -634,14 +639,20 @@ public class CoolReader extends Activity
 
 	static final boolean LOAD_LAST_DOCUMENT_ON_START = true; 
 	
+	private boolean mIsStarted = false;
+	
+	public boolean isStarted() { return mIsStarted; }
+	
 	@Override
 	protected void onStart() {
 		Log.i("cr3", "CoolReader.onStart() fileToLoadOnStart=" + fileToLoadOnStart);
 		super.onStart();
 		
+		
 		mPaused = false;
 		
 		backlightControl.onUserActivity();
+		
 
 		if ( fileToLoadOnStart==null ) {
 			if ( mReaderView!=null && currentView==mReaderView && mReaderView.isBookLoaded() ) {
@@ -840,6 +851,9 @@ public class CoolReader extends Activity
 	    		if ( item!=null )
 	    			item.setEnabled(false);
 	    	}
+    		MenuItem item = menu.findItem(R.id.book_toggle_simple_mode);
+    		if ( item!=null )
+    			item.setTitle(mBrowser.isSimpleViewMode() ? R.string.mi_book_browser_normal_mode : R.string.mi_book_browser_simple_mode );
 	    }
 	}
 	
@@ -987,6 +1001,10 @@ public class CoolReader extends Activity
 			return true; // processed by ReaderView
 		// other commands
 		switch ( itemId ) {
+		case R.id.book_toggle_simple_mode:
+			mBrowser.setSimpleViewMode(!mBrowser.isSimpleViewMode());
+			mReaderView.saveSetting(ReaderView.PROP_APP_FILE_BROWSER_SIMPLE_MODE, mBrowser.isSimpleViewMode()?"1":"0");
+			return true;
 		case R.id.book_sort_order:
 			mBrowser.showSortOrderMenu();
 			return true;
@@ -1208,6 +1226,8 @@ public class CoolReader extends Activity
 		props.setProperty(ReaderView.PROP_MIN_FILE_SIZE_TO_CACHE, "100000");
 		props.setProperty(ReaderView.PROP_FORCED_MIN_FILE_SIZE_TO_CACHE, "32768");
 		props.applyDefault(ReaderView.PROP_HYPHENATION_DICT, Engine.HyphDict.RUSSIAN.toString());
+		props.applyDefault(ReaderView.PROP_APP_FILE_BROWSER_SIMPLE_MODE, "0");
+		
 		return props;
 	}
 

@@ -34,6 +34,9 @@ CR3View::CR3View( QWidget *parent)
         , _selCursor(Qt::IBeamCursor), _waitCursor(Qt::WaitCursor)
         , _selecting(false), _selected(false), _editMode(false)
 {
+#if WORD_SELECTOR_ENABLED==1
+    _wordSelector = NULL;
+#endif
     _data = new DocViewData();
     _data->_props = LVCreatePropsContainer();
     _docview = new LVDocView();
@@ -168,6 +171,7 @@ CR3View::CR3View( QWidget *parent)
 //    }
     updateDefProps();
     setMouseTracking(true);
+    setFocusPolicy(Qt::StrongFocus);
 }
 
 void CR3View::updateDefProps()
@@ -191,12 +195,39 @@ void CR3View::updateDefProps()
 
 CR3View::~CR3View()
 {
+#if WORD_SELECTOR_ENABLED==1
+    if ( _wordSelector )
+        delete _wordSelector;
+#endif
     _docview->savePosition();
     saveHistory( QString() );
     saveSettings( QString() );
     delete _docview;
     delete _data;
 }
+
+#if WORD_SELECTOR_ENABLED==1
+void CR3View::startWordSelection() {
+    if ( isWordSelection() )
+        endWordSelection();
+    _wordSelector = new LVPageWordSelector(_docview);
+    update();
+}
+
+QString CR3View::endWordSelection() {
+    QString text;
+    if ( isWordSelection() ) {
+        ldomWordEx * word = _wordSelector->getSelectedWord();
+        if ( word )
+            text = cr2qt(word->getText());
+        delete _wordSelector;
+        _wordSelector = NULL;
+        _docview->clearSelection();
+        update();
+    }
+    return text;
+}
+#endif
 
 void CR3View::setHyphDir( QString dirname )
 {
@@ -223,8 +254,9 @@ LVTocItem * CR3View::getToc()
 void CR3View::goToXPointer(QString xPointer)
 {
     ldomXPointer p = _docview->getDocument()->createXPointer(qt2cr(xPointer));
+    _docview->savePosToNavigationHistory();
     //if ( _docview->getViewMode() == DVM_SCROLL ) {
-        doCommand( DCMD_GO_POS, p.toPoint().y );
+    doCommand( DCMD_GO_POS, p.toPoint().y );
     //} else {
     //    doCommand( DCMD_GO_PAGE, item->getPage() );
     //}
@@ -882,6 +914,12 @@ void CR3View::OnLoadFileFormatDetected( doc_format_t fileFormat )
         case doc_format_html:
             filename = "htm.css";
             break;
+        case doc_format_doc:
+            filename = "doc.css";
+            break;
+        case doc_format_chm:
+            filename = "chm.css";
+            break;
         default:
             // do nothing
             ;
@@ -933,6 +971,63 @@ void CR3View::setBookmarksDir( QString dirname )
 
 void CR3View::keyPressEvent ( QKeyEvent * event )
 {
+#if WORD_SELECTOR_ENABLED==1
+    if ( isWordSelection() ) {
+        MoveDirection dir = DIR_ANY;
+        switch ( event->key() ) {
+        case Qt::Key_Left:
+        case Qt::Key_A:
+            dir = DIR_LEFT;
+            break;
+        case Qt::Key_Right:
+        case Qt::Key_D:
+            dir = DIR_RIGHT;
+            break;
+        case Qt::Key_W:
+        case Qt::Key_Up:
+            dir = DIR_UP;
+            break;
+        case Qt::Key_S:
+        case Qt::Key_Down:
+            dir = DIR_DOWN;
+            break;
+        case Qt::Key_Q:
+        case Qt::Key_Enter:
+        case Qt::Key_Escape:
+            {
+                QString text = endWordSelection();
+                event->setAccepted(true);
+                CRLog::debug("Word selected: %s", LCSTR(qt2cr(text)));
+            }
+            return;
+        case Qt::Key_Backspace:
+            _wordSelector->reducePattern();
+            update();
+            break;
+        default:
+            if ( event->key()>=Qt::Key_A && event->key()<=Qt::Key_Z ) {
+                QString text = event->text();
+                if ( text.length()==1 ) {
+                    _wordSelector->appendPattern(qt2cr(text));
+                    update();
+                }
+            }
+            event->setAccepted(true);
+            return;
+        }
+        int dist = event->modifiers() & Qt::ShiftModifier ? 5 : 1;
+        _wordSelector->moveBy(dir, dist);
+        update();
+        event->setAccepted(true);
+    } else {
+        if ( event->key()==Qt::Key_F3 && (event->modifiers() & Qt::ShiftModifier) ) {
+            startWordSelection();
+            event->setAccepted(true);
+            return;
+        }
+
+    }
+#endif
     if ( !_editMode )
         return;
     switch ( event->key() ) {

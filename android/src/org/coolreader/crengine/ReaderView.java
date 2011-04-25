@@ -113,6 +113,7 @@ public class ReaderView extends SurfaceView implements android.view.SurfaceHolde
     public static final String PROP_APP_DICTIONARY = "app.dictionary.current";
     public static final String PROP_APP_SELECTION_ACTION = "app.selection.action";
     public static final String PROP_APP_FILE_BROWSER_HIDE_EMPTY_FOLDERS = "app.browser.hide.empty.folders";
+    public static final String PROP_APP_FILE_BROWSER_SIMPLE_MODE = "app.browser.simple.mode";
 
     public static final int PAGE_ANIMATION_NONE = 0;
     public static final int PAGE_ANIMATION_PAPER = 1;
@@ -1539,6 +1540,9 @@ public class ReaderView extends SurfaceView implements android.view.SurfaceHolde
 			mActivity.getScanner().setDirScanEnabled(flg);
         } else if ( key.equals(PROP_APP_SCREEN_BACKLIGHT_LOCK) ) {
 			mActivity.setWakeLockEnabled(flg);
+        } else if ( key.equals(PROP_APP_FILE_BROWSER_SIMPLE_MODE) ) {
+        	if ( mActivity.getBrowser()!=null )
+        		mActivity.getBrowser().setSimpleViewMode(flg);
         } else if ( key.equals(PROP_NIGHT_MODE) ) {
 			mActivity.setNightMode(flg);
         } else if ( key.equals(PROP_APP_TAP_ZONE_HILIGHT) ) {
@@ -1631,6 +1635,8 @@ public class ReaderView extends SurfaceView implements android.view.SurfaceHolde
     				|| PROP_APP_FLICK_BACKLIGHT_CONTROL.equals(key)
     				|| PROP_APP_FILE_BROWSER_HIDE_EMPTY_FOLDERS.equals(key)
     				|| PROP_APP_SELECTION_ACTION.equals(key)
+    				|| PROP_APP_FILE_BROWSER_SIMPLE_MODE.equals(key)
+    				// TODO: redesign all this mess!
     				) {
     			newSettings.setProperty(key, value);
     		} else if ( PROP_HYPHENATION_DICT.equals(key) ) {
@@ -2296,7 +2302,7 @@ public class ReaderView extends SurfaceView implements android.view.SurfaceHolde
 			public void run() {
 				BackgroundThread.ensureBackground();
 				PositionProperties currPos = getPositionPropsInternal(null);
-				if ( currPos.pageMode!=0 ) {
+				if ( currPos!=null && currPos.pageMode!=0 ) {
 					//int dir = startX > maxX/2 ? currPos.pageMode : -currPos.pageMode;
 					int dir = startX > maxX/2 ? 1 : -1;
 					int sx = startX;
@@ -3180,20 +3186,22 @@ public class ReaderView extends SurfaceView implements android.view.SurfaceHolde
 		{
 			BackgroundThread.ensureGUI();
 			Log.d("cr3", "LoadDocumentTask, GUI thread is finished successfully");
-    		mActivity.getHistory().updateBookAccess(mBookInfo);
-    		mActivity.getHistory().saveToDB();
-	        if ( coverPageBytes!=null && coverPageDrawable!=null ) {
-	        	mActivity.getHistory().setBookCoverpageData( mBookInfo.getFileInfo().id, coverPageBytes );
-	        	//mEngine.setProgressDrawable(coverPageDrawable);
-	        }
-	        mOpened = true;
-	        drawPage();
-	        mBackThread.postGUI(new Runnable() {
-	        	public void run() {
-	    			mActivity.showReader();
-	        	}
-	        });
-	        mActivity.setLastSuccessfullyOpenedBook(filename);
+			if ( mActivity.getHistory()!=null ) {
+	    		mActivity.getHistory().updateBookAccess(mBookInfo);
+	    		mActivity.getHistory().saveToDB();
+		        if ( coverPageBytes!=null && coverPageDrawable!=null && mBookInfo!=null && mBookInfo.getFileInfo()!=null ) {
+		        	mActivity.getHistory().setBookCoverpageData( mBookInfo.getFileInfo().id, coverPageBytes );
+		        	//mEngine.setProgressDrawable(coverPageDrawable);
+		        }
+		        mOpened = true;
+		        drawPage();
+		        mBackThread.postGUI(new Runnable() {
+		        	public void run() {
+		    			mActivity.showReader();
+		        	}
+		        });
+		        mActivity.setLastSuccessfullyOpenedBook(filename);
+			}
 		}
 		public void fail( Exception e )
 		{
@@ -3429,21 +3437,24 @@ public class ReaderView extends SurfaceView implements android.view.SurfaceHolde
 		Log.d("cr3", "View.onDetachedFromWindow() is called");
 	}
 
+    public final static String DEFAULT_CSS_IMPORT_PATTERN = "@include \"default.css\"\\;";
 	private String getCSSForFormat( DocumentFormat fileFormat )
 	{
 		if ( fileFormat==null )
 			fileFormat = DocumentFormat.FB2;
 		File[] dataDirs = Engine.getDataDirectories(null, false, false);
+		String defaultCss = mEngine.loadResourceUtf8(fileFormat.getCSSResourceId());
 		for ( File dir : dataDirs ) {
 			File file = new File( dir, fileFormat.getCssName() );
 			if ( file.exists() ) {
 				String css = mEngine.loadFileUtf8(file);
-				if ( css!=null )
+				if ( css!=null ) {
+					css = css.replaceFirst(DEFAULT_CSS_IMPORT_PATTERN, "\n" + defaultCss + "\n");
 					return css;
+				}
 			} 
 		}
-		String s = mEngine.loadResourceUtf8(fileFormat.getCSSResourceId());
-		return s;
+		return defaultCss;
 	} 
 
 	boolean enable_progress_callback = true;

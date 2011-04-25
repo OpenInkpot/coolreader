@@ -44,10 +44,11 @@ int main(int argc, char *argv[])
     {
 #ifdef DEBUG
         lString8 loglevel("TRACE");
+        lString8 logfile("stdout");
 #else
         lString8 loglevel("ERROR");
-#endif
         lString8 logfile("stderr");
+#endif
         for ( int i=1; i<argc; i++ ) {
             if ( !strcmp("-h", argv[i]) || !strcmp("-?", argv[i]) || !strcmp("/?", argv[i]) || !strcmp("--help", argv[i]) ) {
                 printHelp();
@@ -55,6 +56,21 @@ int main(int argc, char *argv[])
             }
             if ( !strcmp("-v", argv[i]) || !strcmp("/v", argv[i]) || !strcmp("--version", argv[i]) ) {
                 printVersion();
+                return 0;
+            }
+            if ( !strcmp("--stats", argv[i]) && i<argc-4 ) {
+                if ( i!=argc-5 ) {
+                    printf("To calculate character encoding statistics, use cr3 <infile.txt> <outfile.cpp> <codepagename> <langname>\n");
+                    return 1;
+                }
+                lString8 list;
+                FILE * out = fopen(argv[i+2], "wb");
+                if ( !out ) {
+                    printf("Cannot create file %s", argv[i+2]);
+                    return 1;
+                }
+                MakeStatsForFile( argv[i+1], argv[i+3], argv[i+4], 0, out, list );
+                fclose(out);
                 return 0;
             }
             lString8 s(argv[i]);
@@ -245,7 +261,7 @@ bool getDirectoryFonts( lString16Collection & pathList, lString16Collection & ex
                     bool found = false;
                     lString16 lc = fileName;
                     lc.lowercase();
-                    for ( int j=0; j<ext.length(); j++ ) {
+                    for ( unsigned j=0; j<ext.length(); j++ ) {
                         if ( lc.endsWith(ext[j]) ) {
                             found = true;
                             break;

@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
       package="org.coolreader"
-      android:versionCode="102"
-      android:versionName="3.0.44-01"
+      android:versionCode="118"
+      android:versionName="3.0.45-08"
       android:installLocation="auto"
       >
     <supports-screens
@@ -39,6 +39,12 @@
                 <data android:pathPattern=".*\\.htm"/>
                 <data android:pathPattern=".*\\.chm"/>
                 <data android:pathPattern=".*\\.epub"/>
+                <data android:pathPattern=".*\\.pdb"/>
+                <data android:pathPattern=".*\\.doc"/>
+                <data android:pathPattern=".*\\.prc"/>
+                <data android:pathPattern=".*\\.pml"/>
+                <data android:pathPattern=".*\\.mobi"/>
+                <data android:pathPattern=".*\\.azw"/>
                 <data android:pathPattern=".*\\.tcr"/>
             </intent-filter>
             <intent-filter>
@@ -49,6 +55,7 @@
                 <data android:mimeType="text/html"/>
                 <data android:mimeType="application/zip"/>
                 <data android:mimeType="application/rtf"/>
+                <data android:mimeType="application/msword"/>
                 <data android:mimeType="application/x-rtf"/>
                 <data android:mimeType="text/richtext"/>
                 <data android:mimeType="application/epub+zip"/>

@@ -43,6 +43,7 @@ MainWindow::MainWindow(QWidget *parent)
     addAction(ui->actionPrevPage);
     addAction(ui->actionNextPage2);
     addAction(ui->actionPrevPage2);
+    addAction(ui->actionNextPage3);
     addAction(ui->actionNextLine);
     addAction(ui->actionPrevLine);
     addAction(ui->actionFirstPage);
@@ -208,7 +209,7 @@ void MainWindow::on_actionOpen_triggered()
     }
     QString fileName = QFileDialog::getOpenFileName(this, tr("Open book file"),
          lastPath,
-         tr("All supported formats (*.fb2 *.txt *.tcr *.rtf *.epub *.html *.htm *.chm *.zip);;FB2 books (*.fb2 *.fb2.zip);;Text files (*.txt);;Rich text (*.rtf);;HTML files (*.htm *.html);;EPUB files (*.epub);;CHM files (*.chm);;ZIP archives (*.zip)"));
+         tr("All supported formats (*.fb2 *.txt *.tcr *.rtf *.doc *.epub *.html *.htm *.chm *.zip *.pdb *.pml *.prc *.pml *.mobi);;FB2 books (*.fb2 *.fb2.zip);;Text files (*.txt);;Rich text (*.rtf);;MS Word document (*.doc);;HTML files (*.htm *.html);;EPUB files (*.epub);;CHM files (*.chm);;MOBI files (*.mobi *.prc *.azw);;PalmDOC files (*.pdb *.pml);;ZIP archives (*.zip)"));
     if ( fileName.length()==0 )
         return;
     if ( !ui->view->loadDocument( fileName ) ) {
@@ -416,7 +417,7 @@ void MainWindow::showEvent ( QShowEvent * event )
         // file name specified at command line
         CRLog::info("Startup Action: filename passed in command line");
         if ( !ui->view->loadDocument( _filenameToOpen ) )
-            ;
+			CRLog::error("cannot load document");
     } else if ( n==0 ) {
         // open recent book
         CRLog::info("Startup Action: Open recent book");
@@ -494,4 +495,9 @@ void MainWindow::on_actionRotate_triggered()
 void MainWindow::on_actionToggleEditMode_triggered()
 {
     ui->view->setEditMode( !ui->view->getEditMode() );
+}
+
+void MainWindow::on_actionNextPage3_triggered()
+{
+    ui->view->nextPage();
 }

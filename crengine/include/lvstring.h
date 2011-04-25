@@ -20,9 +20,9 @@
 #include "lvmemman.h"
 
 /// soft hyphen code
-#define UNICODE_SOFT_HYPHEN_CODE 0x00AD
-#define UNICODE_ZERO_WIDTH_SPACE 0x200B
-#define UNICODE_NO_BREAK_SPACE   0x00A0
+#define UNICODE_SOFT_HYPHEN_CODE 0x00ad
+#define UNICODE_ZERO_WIDTH_SPACE 0x200b
+#define UNICODE_NO_BREAK_SPACE   0x00a0
 
 
 
@@ -69,6 +69,10 @@ lUInt32 lStr_crc32( lUInt32 prevValue, const void * buf, int size );
 
 // returns 0..15 if c is hex digit, -1 otherwise
 int hexDigit( int c );
+// decode LEN hex digits, return decoded number, -1 if invalid
+int decodeHex( const lChar16 * str, int len );
+// decode LEN decimal digits, return decoded number, -1 if invalid
+int decodeDecimal( const lChar16 * str, int len );
 
 
 #define CH_PROP_UPPER       0x0001 ///< uppercase alpha character flag
