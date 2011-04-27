@@ -334,7 +334,7 @@ int GrBitmapEx_Apollo_FOUR(GR_WINDOW_ID id,GR_GC_ID gc,int x,int y,int width,int
     ImageId=GrLoadImageFromBuffer(BmpFileBuf,lpHeader.FileHeader.bfSize,GR_BACKGROUND_TOPLEFT);
     GrDrawImageToFit(id,gc,x,y,BmpWidth,BmpHeight,ImageId);
     GrFreeImage(ImageId);
-    free(BmpFileBuf);
+    delete[] BmpFileBuf;
     return 0;
 }
 
@@ -429,7 +429,7 @@ int GrBitmapEx_Apollo_NEW(GR_WINDOW_ID id,GR_GC_ID gc,int x,int y,int width,int 
     printf("x=%d,y=%d,BmpWidth=%d,BmpHeight=%d\n",x,y,BmpWidth,BmpHeight);
     GrFreeImage(ImageId);
 
-    delete(BmpFileBuf);
+    delete[] BmpFileBuf;
     return 0;
 }
 
@@ -1324,6 +1324,15 @@ int InitDoc(char *fileName)
     } else if ( strstr(fileName, ".epub")!=NULL ) {
         ini_fname = L"cr3-epub.ini";
         css_file_name = L"epub.css";
+    } else if ( strstr(fileName, ".doc")!=NULL ) {
+        ini_fname = L"cr3-doc.ini";
+        css_file_name = L"doc.css";
+    } else if ( strstr(fileName, ".chm")!=NULL ) {
+        ini_fname = L"cr3-chm.ini";
+        css_file_name = L"chm.css";
+    } else if ( strstr(fileName, ".pdb")!=NULL ) {
+        ini_fname = L"cr3-txt.ini";
+        css_file_name = L"txt.css";
     } else {
         ini_fname = L"cr3-fb2.ini";
         css_file_name = L"fb2.css";

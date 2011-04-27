@@ -14,7 +14,7 @@
 #include "DeskLib:Wimp.h"
 #else
 #include <stdlib.h>
-#if defined(__dos) || defined(N_PLAT_NLM)
+#if defined(__dos) || defined(N_PLAT_NLM) || defined(_WIN32)
 extern int getopt(int, char **, const char *);
 #else
 #include <unistd.h>
@@ -33,8 +33,6 @@ extern int getopt(int, char **, const char *);
 #define LEAFNAME_SIZE		(32+1)
 #endif /* __riscos */
 
-/* Current values for options */
-static options_type	tOptionsCurr;
 #if defined(__riscos)
 /* Temporary values for options */
 static options_type	tOptionsTemp;
@@ -84,6 +82,8 @@ static const options_type	tOptionsDefault = {
 #endif /* __riscos */
 };
 
+/* Current values for options */
+static options_type	tOptionsCurr;
 
 #if !defined(__riscos)
 /*
@@ -267,7 +267,7 @@ vCloseCharacterMappingFile(FILE *pFile)
 	(void)fclose(pFile);
 } /* end of pCloseCharacterMappingFile */
 
-
+#if CR3_ANTIWORD_PATCH!=1
 /*
  * iReadOptions - read options
  *
@@ -530,6 +530,7 @@ iReadOptions(int argc, char **argv)
 	return bSuccess ? optind : -1;
 #endif /* __riscos */
 } /* end of iReadOptions */
+#endif
 
 /*
  * vGetOptions - get a copy of the current option values
@@ -541,6 +542,17 @@ vGetOptions(options_type *pOptions)
 
 	*pOptions = tOptionsCurr;
 } /* end of vGetOptions */
+
+/*
+ * vSetOptions - set new current option values
+ */
+void
+vSetOptions(options_type *pOptions)
+{
+    fail(pOptions == NULL);
+
+    tOptionsCurr = *pOptions;
+} /* end of vSetOptions */
 
 #if defined(__riscos)
 /*
