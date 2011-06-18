@@ -3,6 +3,8 @@ package org.coolreader.crengine;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.zip.ZipEntry;
 
 import org.coolreader.CoolReader;
@@ -53,7 +55,7 @@ public class Scanner {
 //			}
 //			return !baseDir.isEmpty();
 //		} catch ( Exception e ) {
-//			Log.e("cr3", "Exception while scanning directory " + baseDir.pathname, e);
+//			L.e("Exception while scanning directory " + baseDir.pathname, e);
 //			return false;
 //		}
 //	}
@@ -98,7 +100,7 @@ public class Scanner {
 				items.add(item);
 			}
 			if ( items.size()==0 ) {
-				Log.i("cr3", "Supported files not found in " + zip.pathname);
+				L.i("Supported files not found in " + zip.pathname);
 				return null;
 			} else if ( items.size()==1 ) {
 				// single supported file in archive
@@ -117,7 +119,7 @@ public class Scanner {
 				return zip;
 			}
 		} catch ( Exception e ) {
-			Log.e("cr3", "IOException while opening " + zip.pathname + " " + e.getMessage());
+			L.e("IOException while opening " + zip.pathname + " " + e.getMessage());
 		}
 		return null;
 	}
@@ -129,8 +131,19 @@ public class Scanner {
 	 */
 	public boolean listDirectory( FileInfo baseDir )
 	{
-		if ( baseDir.isListed )
-			return true;
+		Set<String> knownItems = null;
+		if ( baseDir.isListed ) {
+			knownItems = new HashSet<String>();
+			for ( int i=baseDir.itemCount()-1; i>=0; i-- ) {
+				FileInfo item = baseDir.getItem(i);
+				if ( !item.exists() ) {
+					// remove item from list
+					baseDir.removeChild(item);
+				} else {
+					knownItems.add(item.getBasePath());
+				}
+			}
+		}
 		try {
 			File dir = new File(baseDir.pathname);
 			File[] items = dir.listFiles();
@@ -141,6 +154,8 @@ public class Scanner {
 						if ( f.getName().startsWith(".") )
 							continue; // treat files beginning with '.' as hidden
 						String pathName = f.getAbsolutePath();
+						if ( knownItems!=null && knownItems.contains(pathName) )
+							continue;
 						boolean isZip = pathName.toLowerCase().endsWith(".zip");
 						FileInfo item = mFileList.get(pathName);
 						boolean isNew = false;
@@ -181,6 +196,8 @@ public class Scanner {
 						if ( f.getName().startsWith(".") )
 							continue; // treat dirs beginning with '.' as hidden
 						FileInfo item = new FileInfo( f );
+						if ( knownItems!=null && knownItems.contains(item.getPathName()) )
+							continue;
 						item.parent = baseDir;
 						baseDir.addDir(item);					
 					}
@@ -189,7 +206,7 @@ public class Scanner {
 			baseDir.isListed = true;
 			return !baseDir.isEmpty();
 		} catch ( Exception e ) {
-			Log.e("cr3", "Exception while listing directory " + baseDir.pathname, e);
+			L.e("Exception while listing directory " + baseDir.pathname, e);
 			baseDir.isListed = true;
 			return false;
 		}
@@ -242,7 +259,7 @@ public class Scanner {
 			}
 
 			public void fail(Exception e) {
-				Log.e("cr3", "Exception while scanning directory " + baseDir.pathname, e);
+				L.e("Exception while scanning directory " + baseDir.pathname, e);
 				baseDir.isScanned = true;
 				if ( progressShown )
 					engine.hideProgress();
@@ -371,6 +388,8 @@ public class Scanner {
 		dir.isDirectory = true;
 		dir.pathname = pathname;
 		dir.filename = filename;
+		if ( mRoot.findItemByPathName(pathname)!=null )
+			return false; // exclude duplicates
 		if ( listIt && !listDirectory(dir) )
 			return false;
 		mRoot.addDir(dir);
@@ -380,6 +399,40 @@ public class Scanner {
 			dir.isScanned = true;
 		}
 		return true;
+	}
+	
+	private void addOPDSRoot() {
+		FileInfo dir = new FileInfo();
+		dir.isDirectory = true;
+		dir.pathname = FileInfo.OPDS_LIST_TAG;
+		dir.filename = "OPDS Catalogs";
+		dir.isListed = true;
+		dir.isScanned = true;
+		dir.parent = mRoot;
+		mRoot.addDir(dir);
+		String[] urls = {
+				"http://www.feedbooks.com/catalog/", "Feedbooks",
+				"http://bookserver.archive.org/catalog/", "Internet Archive",
+				"http://m.gutenberg.org/", "Project Gutenberg", 
+				"http://ebooksearch.webfactional.com/catalog.atom", "eBookSearch", 
+				"http://bookserver.revues.org/", "Revues.org", 
+				"http://www.legimi.com/opds/root.atom", "Legimi",
+				"http://www.ebooksgratuits.com/opds/", "Ebooks libres et gratuits",
+				"http://213.5.65.159/opds/", "Flibusta", 
+				"http://lib.ololo.cc/opds/", "lib.ololo.cc",
+		};
+		for ( int i=0; i<urls.length-1; i+=2 ) {
+			String url = urls[i];
+			String title = urls[i+1];
+			FileInfo odps = new FileInfo();
+			odps.isDirectory = true;
+			odps.pathname = FileInfo.OPDS_DIR_PREFIX + url;
+			odps.filename = title;
+			odps.isListed = true;
+			odps.isScanned = true;
+			odps.parent = dir;
+			dir.addDir(odps);
+		}
 	}
 	
 	/**
@@ -422,8 +475,14 @@ public class Scanner {
 	public FileInfo findParent( FileInfo file, FileInfo root )
 	{
 		FileInfo parent = findParentInternal(file, root);
-		if ( parent==null )
-			return null;
+		if ( parent==null ) {
+			autoAddRootForFile(new File(file.pathname) );
+			parent = findParentInternal(file, root);
+			if ( parent==null ) {
+				L.e("Cannot find root directory for file " + file.pathname);
+				return null;
+			}
+		}
 		long maxTs = android.os.SystemClock.uptimeMillis() + MAX_DIR_LIST_TIME;
 		listSubtrees(root, mHideEmptyDirs ? 5 : 1, maxTs);
 		return parent;
@@ -498,6 +557,40 @@ public class Scanner {
 			existingResults.addFile(item);
 		return existingResults;
 	}
+
+	private void autoAddRoots( String rootPath, String[] pathsToExclude )
+	{
+		try {
+			File root = new File(rootPath);
+			File[] files = root.listFiles();
+			if ( files!=null ) {
+				for ( File f : files ) {
+					if ( !f.isDirectory() )
+						continue;
+					String fullPath = f.getAbsolutePath();
+					if ( engine.isLink(fullPath) ) {
+						L.d("skipping symlink " + fullPath);
+						continue;
+					}
+					boolean skip = false;
+					for ( String path : pathsToExclude ) {
+						if ( fullPath.startsWith(path) ) {
+							skip = true;
+							break;
+						}
+					}
+					if ( skip )
+						continue;
+					if ( !f.canWrite() )
+						continue;
+					L.i("Found possible mount point " + f.getAbsolutePath());
+					addRoot(f.getAbsolutePath(), f.getAbsolutePath(), true);
+				}
+			}
+		} catch ( Exception e ) {
+			L.w("Exception while trying to auto add roots");
+		}
+	}
 	
 	public void initRoots()
 	{
@@ -519,11 +612,32 @@ public class Scanner {
 		addRoot( "/mnt/extsd", "External SD /mnt/extsd", true);
 		// external SD card Huawei S7
 		addRoot( "/sdcard2", R.string.dir_sd_card_2, true);
+		//addRoot( "/mnt/localdisk", "/mnt/localdisk", true);
+		autoAddRoots( "/", SYSTEM_ROOT_PATHS );
+		autoAddRoots( "/mnt", new String[] {} );
+		
+		addOPDSRoot();
 	}
+	
+	public boolean autoAddRootForFile( File f ) {
+		File p = f.getParentFile();
+		while ( p!=null ) {
+			if ( p.getParentFile()==null || p.getParentFile().getParentFile()==null )
+				break;
+			p = p.getParentFile();
+		}
+		if ( p!=null ) {
+			L.i("Found possible mount point " + p.getAbsolutePath());
+			return addRoot(p.getAbsolutePath(), p.getAbsolutePath(), true);
+		}
+		return false;
+	}
+	
+	private static final String[] SYSTEM_ROOT_PATHS = {"/system", "/data", "/mnt"};
 	
 //	public boolean scan()
 //	{
-//		Log.i("cr3", "Started scanning");
+//		L.i("Started scanning");
 //		long start = System.currentTimeMillis();
 //		mFileList.clear();
 //		mFilesForParsing.clear();
@@ -543,15 +657,50 @@ public class Scanner {
 //		lookupDB();
 //		parseBookProperties();
 //		updateProgress(9999);
-//		Log.i("cr3", "Finished scanning (" + (System.currentTimeMillis()-start)+ " ms)");
+//		L.i("Finished scanning (" + (System.currentTimeMillis()-start)+ " ms)");
 //		return res;
 //	}
 	
+	
+	public FileInfo getDownloadDirectory() {
+		for ( int i=0; i<mRoot.dirCount(); i++ ) {
+			FileInfo item = mRoot.getDir(i);
+			if ( !item.isSpecialDir() && !item.isArchive ) {
+				FileInfo books = item.findItemByPathName(item.pathname+"/Books");
+				if ( books.exists() )
+					return books;
+				File dir = new File(item.getPathName());
+				if ( dir.isDirectory() && dir.canWrite() ) {
+					File f = new File( dir, "Books" );
+					if ( f.mkdirs() ) {
+						books = new FileInfo(f);
+						books.parent = item;
+						item.addDir(books);
+						books.isScanned = true;
+						books.isListed = true;
+						return books;
+					}
+				}
+			}
+		}
+		return null;
+	}
 	
 	public FileInfo getRoot() 
 	{
 		return mRoot;
 	}
+
+	public FileInfo getOPDSRoot() 
+	{
+		for ( int i=0; i<mRoot.dirCount(); i++ ) {
+			if ( mRoot.getDir(i).isOPDSRoot() )
+				return mRoot.getDir(i);
+		}
+		L.w("OPDS root directory not found!");
+		return null;
+	}
+	
 	public Scanner( CoolReader coolReader, CRDB db, Engine engine )
 	{
 		this.engine = engine;
