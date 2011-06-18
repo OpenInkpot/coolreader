@@ -1,3 +1,15 @@
+cr3 (3.0.45-9.oi2) zelazny; urgency=low
+
+  * Add mime-type for word files
+
+ -- Alexander Kerner <lunohod@openinkpot.org>  Fri, 29 Apr 2011 22:40:09 +0200
+
+cr3 (3.0.45-9.oi1) zelazny; urgency=low
+
+  * new upstream version
+
+ -- Alexander Kerner <lunohod@openinkpot.org>  Wed, 27 Apr 2011 19:01:31 +0200
+
 cr3 (3.0.43-13) zelazny; urgency=low
 
   * Add settings for eb600

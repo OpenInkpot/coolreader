@@ -2,6 +2,7 @@ package org.coolreader.crengine;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Enumeration;
@@ -13,6 +14,17 @@ import org.coolreader.R;
 import android.util.Log;
 
 public class FileInfo {
+
+	public final static String RECENT_DIR_TAG = "@recent";
+	public final static String SEARCH_RESULT_DIR_TAG = "@search";
+	public final static String ROOT_DIR_TAG = "@root";
+	public final static String OPDS_LIST_TAG = "@opds";
+	public final static String OPDS_DIR_PREFIX = "@opds:";
+	public final static String AUTHORS_TAG = "@authors";
+	public final static String AUTHOR_PREFIX = "@author:";
+	
+	
+	
 	Long id; // db id
 	String title; // book title
 	String authors; // authors, delimited with '|'
@@ -36,6 +48,8 @@ public class FileInfo {
 	private ArrayList<FileInfo> files;// files
 	private ArrayList<FileInfo> dirs; // directories
 	FileInfo parent; // parent item
+	
+	Object tag; // some additional information
 	
 	public static final int DONT_USE_DOCUMENT_STYLES_FLAG = 1;
 
@@ -179,10 +193,6 @@ public class FileInfo {
 		return null;
 	}
 	
-	public final static String RECENT_DIR_TAG = "@recent";
-	public final static String SEARCH_RESULT_DIR_TAG = "@search";
-	public final static String ROOT_DIR_TAG = "@root";
-	
 	public boolean isRecentDir()
 	{
 		return RECENT_DIR_TAG.equals(pathname);
@@ -200,12 +210,29 @@ public class FileInfo {
 	
 	public boolean isSpecialDir()
 	{
-		return pathname.startsWith("@");
+		return pathname!=null && pathname.startsWith("@");
+	}
+	
+	public boolean isOPDSDir()
+	{
+		return pathname!=null && pathname.startsWith(OPDS_DIR_PREFIX);
+	}
+	
+	public boolean isOPDSRoot()
+	{
+		return OPDS_LIST_TAG.equals(pathname);
 	}
 	
 	public boolean isHidden()
 	{
 		return pathname.startsWith(".");
+	}
+	
+	public String getOPDSUrl()
+	{
+		if ( !pathname.startsWith(OPDS_DIR_PREFIX) )
+			return null;
+		return pathname.substring(OPDS_DIR_PREFIX.length());
 	}
 	
 	/**
@@ -218,6 +245,13 @@ public class FileInfo {
 	{
 		if ( arcname!=null )
 			return arcname + ARC_SEPARATOR + pathname;
+		return pathname;
+	}
+
+	public String getBasePath()
+	{
+		if ( arcname!=null )
+			return arcname;
 		return pathname;
 	}
 
@@ -247,6 +281,22 @@ public class FileInfo {
 		if ( files==null )
 			files = new ArrayList<FileInfo>();
 		files.add(file);
+	}
+	public void addItems( Collection<FileInfo> items )
+	{
+		for ( FileInfo item : items ) {
+			if ( item.isDirectory )
+				addDir(item);
+			else
+				addFile(item);
+			item.parent = this;
+		}
+	}
+	public void replaceItems( Collection<FileInfo> items )
+	{
+		files = null;
+		dirs = null;
+		addItems( items );
 	}
 	public boolean isEmpty()
 	{
@@ -321,11 +371,23 @@ public class FileInfo {
 				dirs.remove(i);
 	}
 	
-	private void removeChild( FileInfo item )
+	public void removeChild( FileInfo item )
 	{
-		int n = files.indexOf(item);
-		if ( n>=0 && n<files.size() )
-			files.remove(n);
+		if ( item.isSpecialDir() )
+			return;
+		if ( files!=null ) {
+			int n = files.indexOf(item);
+			if ( n>=0 && n<files.size() ) {
+				files.remove(n);
+				return;
+			}
+		}
+		if ( dirs!=null ) {
+			int n = dirs.indexOf(item);
+			if ( n>=0 && n<dirs.size() ) {
+				dirs.remove(n);
+			}
+		}
 	}
 	
 	public boolean deleteFile()
@@ -371,6 +433,21 @@ public class FileInfo {
 			return false;
 		}
 		return new File(pathname).exists();
+	}
+	
+	/**
+	 * @return true if item (file, directory, or archive) exists
+	 */
+	public boolean exists()
+	{
+		if ( isArchive ) {
+			if ( arcname==null )
+				return false;
+			File f = new File(arcname);
+			return f.exists();
+		}
+		File f = new File(pathname);
+		return f.exists();
 	}
 	
 	public boolean isModified() {
@@ -461,7 +538,7 @@ public class FileInfo {
 		}
 		
 		/**
-		 * Compares two strings
+		 * Compares two strings - with numbers sorted by value.
 		 * @param str1
 		 * @param str2
 		 * @return
@@ -474,7 +551,48 @@ public class FileInfo {
 				return -1;
 			if ( str2==null )
 				return 1;
-			return str1.compareTo(str2);
+			
+			int p1 = 0;
+			int p2 = 0;
+			for ( ;; ) {
+				if ( p1>=str1.length() ) {
+					if ( p2>=str2.length() )
+						return 0;
+					return 1;
+				}
+				if ( p2>=str2.length() )
+					return -1;
+				char ch1 = str1.charAt(p1);
+				char ch2 = str2.charAt(p2);
+				if ( ch1>='0' && ch1<='9' && ch2>='0' && ch2<='9' ) {
+					int n1 = 0;
+					int n2 = 0;
+					while ( ch1>='0' && ch1<='9' ) {
+						p1++;
+						n1 = n1 * 10 + (ch1-'0');
+						if ( p1>=str1.length() )
+							break;
+						ch1 = str1.charAt(p1);
+					}
+					while ( ch2>='0' && ch2<='9' ) {
+						p2++;
+						n2 = n2 * 10 + (ch2-'0');
+						if ( p2>=str2.length() )
+							break;
+						ch2 = str2.charAt(p2);
+					}
+					int c = cmp(n1, n2);
+					if ( c!=0 )
+						return c;
+				} else {
+					if ( ch1<ch2 )
+						return -1;
+					if ( ch1>ch2 )
+						return 1;
+					p1++;
+					p2++;
+				}
+			}
 		}
 		
 		/**
@@ -491,7 +609,7 @@ public class FileInfo {
 				return 1;
 			if ( str2==null )
 				return -1;
-			return str1.compareTo(str2);
+			return cmp(str1, str2);
 		}
 		
 		private static int cmp( long n1, long n2 )
@@ -539,5 +657,9 @@ public class FileInfo {
 	public String toString()
 	{
 		return pathname;
+	}
+	
+	public boolean allowSorting() {
+		return isDirectory && !isRootDir() && !isRecentDir() && !isOPDSDir();
 	}
 }
