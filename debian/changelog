@@ -1,3 +1,9 @@
+cr3 (3.0.46-10.oi1) zelazny; urgency=low
+
+  * Merge with upstream
+
+ -- Alexander Kerner <lunohod@openinkpot.org>  Sat, 18 Jun 2011 15:22:10 +0200
+
 cr3 (3.0.45-9.oi2) zelazny; urgency=low
 
   * Add mime-type for word files
