@@ -312,7 +312,8 @@ CR3View::CR3View( QWidget *parent)
     _docview->setFontSizes( sizes, false );
 
     _docview->setBatteryIcons( getBatteryIcons(0x000000) );
-    _docview->setBatteryState( -1 );
+    _docview->setBatteryState( -2 ); // don't show battery
+    //_docview->setBatteryState( 75 ); // 75%
 //    LVStreamRef stream;
 //    stream = LVOpenFileStream("/home/lve/.cr3/textures/old_paper.png", LVOM_READ);
     //stream = LVOpenFileStream("/home/lve/.cr3/textures/tx_wood.jpg", LVOM_READ);
@@ -1126,6 +1127,23 @@ void CR3View::setBookmarksDir( QString dirname )
 
 void CR3View::keyPressEvent ( QKeyEvent * event )
 {
+#if 0
+    // testing sentence navigation/selection
+    switch ( event->key() ) {
+    case Qt::Key_Z:
+        _docview->doCommand(DCMD_SELECT_FIRST_SENTENCE);
+        update();
+        return;
+    case Qt::Key_X:
+        _docview->doCommand(DCMD_SELECT_NEXT_SENTENCE);
+        update();
+        return;
+    case Qt::Key_C:
+        _docview->doCommand(DCMD_SELECT_PREV_SENTENCE);
+        update();
+        return;
+    }
+#endif
 #if WORD_SELECTOR_ENABLED==1
     if ( isWordSelection() ) {
         MoveDirection dir = DIR_ANY;

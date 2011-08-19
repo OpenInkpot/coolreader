@@ -419,6 +419,7 @@ void LVDocView::clearImageCache() {
 #if CR_ENABLE_PAGE_IMAGE_CACHE==1
 	m_imageCache.clear();
 #endif
+    m_section_bounds_valid = false;
 	if (m_callback != NULL)
 		m_callback->OnImageCacheClear();
 }
@@ -1082,7 +1083,11 @@ int LVDocView::GetFullHeight() {
 int LVDocView::getPageHeaderHeight() {
 	if (!getPageHeaderInfo())
 		return 0;
-	return getInfoFont()->getHeight()*12/10 + HEADER_MARGIN + 5;
+        int h = getInfoFont()->getHeight();
+        int bh = m_batteryIcons.length()>0 ? m_batteryIcons[0]->GetHeight() * 11/10 + HEADER_MARGIN / 2 : 0;
+        if ( bh>h )
+            h = bh;
+        return h + HEADER_MARGIN;
 }
 
 /// calculate page header rectangle
@@ -1284,6 +1289,7 @@ LVArray<int> & LVDocView::getSectionBounds() {
 	ldomNode * body = m_doc->nodeFromXPath(lString16(L"/FictionBook/body[1]"));
 	lUInt16 section_id = m_doc->getElementNameIndex(L"section");
 	int fh = GetFullHeight();
+    int pc = getVisiblePageCount();
 	if (body && fh > 0) {
 		int cnt = body->getChildCount();
 		for (int i = 0; i < cnt; i++) {
@@ -1291,10 +1297,21 @@ LVArray<int> & LVDocView::getSectionBounds() {
             ldomNode * l1section = body->getChildElementNode(i, section_id);
             if (!l1section)
 				continue;
-			lvRect rc;
-			l1section->getAbsRect(rc);
-			int p = (int) (((lInt64) rc.top * 10000) / fh);
-			m_section_bounds.add(p);
+
+            lvRect rc;
+            l1section->getAbsRect(rc);
+            if (getViewMode() == DVM_SCROLL) {
+                int p = (int) (((lInt64) rc.top * 10000) / fh);
+                m_section_bounds.add(p);
+            } else {
+                int fh = m_pages.length();
+                if ( (pc==2 && (fh&1)) )
+                    fh++;
+                int p = m_pages.FindNearestPage(rc.top, 0);
+                if (fh > 1)
+                    m_section_bounds.add((int) (((lInt64) p * 10000) / fh));
+            }
+
 		}
 	}
 	m_section_bounds.add(10000);
@@ -1313,8 +1330,12 @@ int LVDocView::getPosPercent() {
 		else
 			return 0;
 	} else {
-		int fh = getPageCount();
-		int p = getCurPage() + 1;
+        int fh = m_pages.length();
+        if ( (getVisiblePageCount()==2 && (fh&1)) )
+            fh++;
+        int p = getCurPage();// + 1;
+//        if ( getVisiblePageCount()>1 )
+//            p++;
 		if (fh > 0)
 			return (int) (((lInt64) p * 10000) / fh);
 		else
@@ -1425,11 +1446,11 @@ void LVDocView::drawPageHeader(LVDrawBuf * drawbuf, const lvRect & headerRc,
 		//pal[0] = cl1;
 	}
 	//drawbuf->FillRect(info.left, gpos-gh, info.left+percent_pos, gpos-gh+1, cl1 );
-	drawbuf->FillRect(info.left, gpos - 2, info.left + percent_pos, gpos - 2
-			+ 1, cl1);
+    if ( leftPage )
+        drawbuf->FillRect(info.left, gpos - 2, info.right, gpos - 2	+ 1, cl1);
 	//drawbuf->FillRect(info.left+percent_pos, gpos-gh, info.right, gpos-gh+1, cl1 ); //cl3
-	drawbuf->FillRect(info.left + percent_pos, gpos - 2, info.right, gpos - 2
-			+ 1, cl1); // cl3
+//	drawbuf->FillRect(info.left + percent_pos, gpos - 2, info.right, gpos - 2
+//			+ 1, cl1); // cl3
 
 	int sbound_index = 0;
 	bool enableMarks = !leftPage && (phi & PGHDR_CHAPTER_MARKS) && sbounds.length()<info.width()/5;
@@ -1452,24 +1473,26 @@ void LVDocView::drawPageHeader(LVDrawBuf * drawbuf, const lvRect & headerRc,
 			cl = cl1;
 			sz = 1;
 		} else {
-			if ( x<percent_pos ) {
+            if ( x < info.left + percent_pos ) {
 				sz = 3;
 				if ( boundCategory==0 )
 					cl = cl1;
-			} else {
+                else
+                    sz = 0;
+            } else {
 				if ( boundCategory!=0 )
 					sz = 3;
 				cl = cl1;
 			}
 		}
-		if ( cl!=-1 )
+        if ( cl!=-1 && sz>0 )
 			drawbuf->FillRect(x, gpos - 2 - sz/2, x+1, gpos - 2
 					+ sz/2 + 1, cl);
 	}
 
 	lString16 text;
 	//int iy = info.top; // + (info.height() - m_infoFont->getHeight()) * 2 / 3;
-	int iy = info.top + /*m_infoFont->getHeight() +*/ (info.height() - m_infoFont->getHeight()) / 2;
+        int iy = info.top + /*m_infoFont->getHeight() +*/ (info.height() - m_infoFont->getHeight()) / 2 - HEADER_MARGIN/2;
 
 	if (!m_pageHeaderOverride.empty()) {
 		text = m_pageHeaderOverride;
@@ -2214,7 +2237,7 @@ void LVDocView::setRenderProps(int dx, int dy) {
 	if (!m_font || !m_infoFont)
 		return;
 	m_doc->setRenderProps(dx, dy, m_showCover, m_showCover ? dy
-			+ m_pageMargins.bottom * 4 : 0, m_font, m_def_interline_space);
+            + m_pageMargins.bottom * 4 : 0, m_font, m_def_interline_space, m_props);
 }
 
 void LVDocView::Render(int dx, int dy, LVRendPageList * pages) {
@@ -2243,7 +2266,7 @@ void LVDocView::Render(int dx, int dy, LVRendPageList * pages) {
 		//CRLog::trace("calling render() for document %08X font=%08X", (unsigned int)m_doc, (unsigned int)m_font.get() );
 		m_doc->render(pages, isDocumentOpened() ? m_callback : NULL, dx, dy,
 				m_showCover, m_showCover ? dy + m_pageMargins.bottom * 4 : 0,
-				m_font, m_def_interline_space);
+                m_font, m_def_interline_space, m_props);
 
 #if 0
 		FILE * f = fopen("pagelist.log", "wt");
@@ -3118,6 +3141,49 @@ bool LVDocView::LoadDocument(const lChar16 * fname) {
 	if (LoadDocument(stream)) {
 		m_filename = lString16(fname);
 		m_stream.Clear();
+
+#define DUMP_OPENED_DOCUMENT_SENTENCES 0 // debug XPointer navigation
+#if DUMP_OPENED_DOCUMENT_SENTENCES==1
+        LVStreamRef out = LVOpenFileStream("/tmp/sentences.txt", LVOM_WRITE);
+        if ( !out.isNull() ) {
+            checkRender();
+            {
+                ldomXPointerEx ptr( m_doc->getRootNode(), m_doc->getRootNode()->getChildCount());
+                *out << "FORWARD ORDER:\n\n";
+                //ptr.nextVisibleText();
+                ptr.prevVisibleWordEnd();
+                if ( ptr.thisSentenceStart() ) {
+                    while ( 1 ) {
+                        ldomXPointerEx ptr2(ptr);
+                        ptr2.thisSentenceEnd();
+                        ldomXRange range(ptr, ptr2);
+                        lString16 str = range.getRangeText();
+                        *out << ">sentence: " << UnicodeToUtf8(str) << "\n";
+                        if ( !ptr.nextSentenceStart() )
+                            break;
+                    }
+                }
+            }
+            {
+                ldomXPointerEx ptr( m_doc->getRootNode(), 1);
+                *out << "\n\nBACKWARD ORDER:\n\n";
+                while ( ptr.lastChild() )
+                    ;// do nothing
+                if ( ptr.thisSentenceStart() ) {
+                    while ( 1 ) {
+                        ldomXPointerEx ptr2(ptr);
+                        ptr2.thisSentenceEnd();
+                        ldomXRange range(ptr, ptr2);
+                        lString16 str = range.getRangeText();
+                        *out << "<sentence: " << UnicodeToUtf8(str) << "\n";
+                        if ( !ptr.prevSentenceStart() )
+                            break;
+                    }
+                }
+            }
+        }
+#endif
+
 		return true;
 	}
 	m_stream.Clear();
@@ -3287,7 +3353,8 @@ bool LVDocView::LoadDocument(LVStreamRef stream) {
 			}
 		}
 
-		if ( DetectCHMFormat( m_stream ) ) {
+#if CHM_SUPPORT_ENABLED==1
+        if ( DetectCHMFormat( m_stream ) ) {
 			// CHM
 			CRLog::info("CHM format detected");
 			createEmptyDocument();
@@ -3317,6 +3384,7 @@ bool LVDocView::LoadDocument(LVStreamRef stream) {
 				return true;
 			}
 		}
+#endif
 
 #if ENABLE_ANTIWORD==1
         if ( DetectWordFormat( m_stream ) ) {
@@ -4620,6 +4688,28 @@ int LVDocView::doCommand(LVDocCmd cmd, int param) {
 		return moveByChapter(param);
 	}
 		break;
+    case DCMD_SELECT_FIRST_SENTENCE:
+    case DCMD_SELECT_NEXT_SENTENCE:
+    case DCMD_SELECT_PREV_SENTENCE:
+        return onSelectionCommand( cmd, param );
+
+    /*
+                ldomXPointerEx ptr( m_doc->getRootNode(), m_doc->getRootNode()->getChildCount());
+                *out << "FORWARD ORDER:\n\n";
+                //ptr.nextVisibleText();
+                ptr.prevVisibleWordEnd();
+                if ( ptr.thisSentenceStart() ) {
+                    while ( 1 ) {
+                        ldomXPointerEx ptr2(ptr);
+                        ptr2.thisSentenceEnd();
+                        ldomXRange range(ptr, ptr2);
+                        lString16 str = range.getRangeText();
+                        *out << ">sentence: " << UnicodeToUtf8(str) << "\n";
+                        if ( !ptr.nextSentenceStart() )
+                            break;
+                    }
+                }
+    */
 	default:
 		// DO NOTHING
 		break;
@@ -4627,8 +4717,63 @@ int LVDocView::doCommand(LVDocCmd cmd, int param) {
 	return 1;
 }
 
+int LVDocView::onSelectionCommand( int cmd, int param )
+{
+    checkRender();
+    LVRef<ldomXRange> pageRange = getPageDocumentRange();
+    ldomXPointerEx pos( getBookmark() );
+    ldomXRangeList & sel = getDocument()->getSelections();
+    ldomXRange currSel;
+    if ( sel.length()>0 )
+        currSel = *sel[0];
+    bool moved = false;
+    if ( !currSel.isNull() && !pageRange->isInside(currSel.getStart()) && !pageRange->isInside(currSel.getEnd()) )
+        currSel.clear();
+    if ( currSel.isNull() || currSel.getStart().isNull() ) {
+        // select first sentence on page
+        if ( pos.isNull() ) {
+            clearSelection();
+            return 0;
+        }
+        if ( pos.thisSentenceStart() )
+            currSel.setStart(pos);
+        moved = true;
+    }
+    if ( currSel.getStart().isNull() ) {
+        clearSelection();
+        return 0;
+    }
+    // selection start doesn't match sentence bounds
+    if ( !currSel.getStart().isSentenceStart() ) {
+        currSel.getStart().thisSentenceStart();
+        moved = true;
+    }
+    // update sentence end
+    if ( !moved )
+        switch ( cmd ) {
+        case DCMD_SELECT_NEXT_SENTENCE:
+            if ( !currSel.getStart().nextSentenceStart() )
+                return 0;
+            break;
+        case DCMD_SELECT_PREV_SENTENCE:
+            if ( !currSel.getStart().prevSentenceStart() )
+                return 0;
+            break;
+        case DCMD_SELECT_FIRST_SENTENCE:
+        default: // unknown action
+            break;
+        }
+    currSel.setEnd(currSel.getStart());
+    currSel.getEnd().thisSentenceEnd();
+    currSel.setFlags(1);
+    selectRange(currSel);
+    goToBookmark(currSel.getStart());
+    CRLog::debug("Sel: %s", LCSTR(currSel.getRangeText()));
+    return 1;
+}
+
 //static int cr_font_sizes[] = { 24, 29, 33, 39, 44 };
-static int cr_interline_spaces[] = { 100, 80, 90, 105, 110, 115, 120, 130, 140, 150, 160, 180, 200 };
+static int cr_interline_spaces[] = { 100, 70, 75, 80, 85, 90, 95, 105, 110, 115, 120, 130, 140, 150, 160, 180, 200 };
 
 /// sets default property values if properties not found, checks ranges
 void LVDocView::propsUpdateDefaults(CRPropRef props) {
@@ -4737,6 +4882,18 @@ void LVDocView::propsUpdateDefaults(CRPropRef props) {
     props->setStringDef(PROP_STATUS_CHAPTER_MARKS, "1");
     props->setStringDef(PROP_EMBEDDED_STYLES, "1");
     props->setStringDef(PROP_FLOATING_PUNCTUATION, "1");
+
+    img_scaling_option_t defImgScaling;
+    props->setIntDef(PROP_IMG_SCALING_ZOOMOUT_BLOCK_SCALE, defImgScaling.max_scale);
+    props->setIntDef(PROP_IMG_SCALING_ZOOMOUT_INLINE_SCALE, 0); //auto
+    props->setIntDef(PROP_IMG_SCALING_ZOOMIN_BLOCK_SCALE, defImgScaling.max_scale);
+    props->setIntDef(PROP_IMG_SCALING_ZOOMIN_INLINE_SCALE, 0); // auto
+    props->setIntDef(PROP_IMG_SCALING_ZOOMOUT_BLOCK_MODE, defImgScaling.mode);
+    props->setIntDef(PROP_IMG_SCALING_ZOOMOUT_INLINE_MODE, defImgScaling.mode);
+    props->setIntDef(PROP_IMG_SCALING_ZOOMIN_BLOCK_MODE, defImgScaling.mode);
+    props->setIntDef(PROP_IMG_SCALING_ZOOMIN_INLINE_MODE, defImgScaling.mode);
+
+    props->setIntDef(PROP_FILE_PROPS_FONT_SIZE, 22);
 }
 
 #define H_MARGIN 8
@@ -4784,7 +4941,15 @@ CRPropRef LVDocView::propsApply(CRPropRef props) {
 			int antialiasingMode = props->getIntDef(PROP_FONT_ANTIALIASING, 2);
 			fontMan->SetAntialiasMode(antialiasingMode);
 			requestRender();
-		} else if (name == PROP_LANDSCAPE_PAGES) {
+        } else if (name == PROP_FONT_GAMMA) {
+            double gamma = 1.0;
+            lString16 s = props->getStringDef(PROP_FONT_GAMMA, "1.0");
+            lString8 s8 = UnicodeToUtf8(s);
+            if ( sscanf(s8.c_str(), "%lf", &gamma)==1 ) {
+                fontMan->SetGamma(gamma);
+                clearImageCache();
+            }
+        } else if (name == PROP_LANDSCAPE_PAGES) {
 			int pages = props->getIntDef(PROP_LANDSCAPE_PAGES, 0);
 			setVisiblePageCount(pages);
 			requestRender();
@@ -4805,7 +4970,14 @@ CRPropRef LVDocView::propsApply(CRPropRef props) {
 					false);
 			setTextFormatOptions(preformatted ? txt_format_pre
 					: txt_format_auto);
-		} else if (name == PROP_FONT_COLOR || name == PROP_BACKGROUND_COLOR
+        } else if (name == PROP_IMG_SCALING_ZOOMIN_INLINE_SCALE || name == PROP_IMG_SCALING_ZOOMIN_INLINE_MODE
+                   || name == PROP_IMG_SCALING_ZOOMOUT_INLINE_SCALE || name == PROP_IMG_SCALING_ZOOMOUT_INLINE_MODE
+                   || name == PROP_IMG_SCALING_ZOOMIN_BLOCK_SCALE || name == PROP_IMG_SCALING_ZOOMIN_BLOCK_MODE
+                   || name == PROP_IMG_SCALING_ZOOMOUT_BLOCK_SCALE || name == PROP_IMG_SCALING_ZOOMOUT_BLOCK_MODE
+                   ) {
+            m_props->setString(name.c_str(), value);
+            requestRender();
+        } else if (name == PROP_FONT_COLOR || name == PROP_BACKGROUND_COLOR
 				|| name == PROP_DISPLAY_INVERSE || name==PROP_STATUS_FONT_COLOR) {
 			// update current value in properties
 			m_props->setString(name.c_str(), value);

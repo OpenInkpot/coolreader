@@ -4,15 +4,15 @@
 
    lvtinydom.cpp: fast and compact XML DOM tree
 
-   (c) Vadim Lopatin, 2000-2009
+   (c) Vadim Lopatin, 2000-2011
    This source code is distributed under the terms of
    GNU General Public License
    See LICENSE file for details
 
 *******************************************************/
 
-/// change in case of incompatible changes in swap/cache file format
-#define CACHE_FILE_FORMAT_VERSION "3.03.10"
+/// change in case of incompatible changes in swap/cache file format to avoid using incompatible swap file
+#define CACHE_FILE_FORMAT_VERSION "3.03.13"
 
 #ifndef DOC_DATA_COMPRESSION_LEVEL
 /// data compression level (0=no compression, 1=fast compressions, 3=normal compression)
@@ -119,6 +119,7 @@ enum CacheFileBlockType {
 
 #include <stdlib.h>
 #include <string.h>
+#include "../include/crsetup.h"
 #include "../include/lvstring.h"
 #include "../include/lvtinydom.h"
 #include "../include/fb2def.h"
@@ -2523,6 +2524,14 @@ lUInt16 lxmlDocBase::getElementNameIndex( const lChar16 * name )
 }
 
 
+/// create formatted text object with options set
+LFormattedText * lxmlDocBase::createFormattedText()
+{
+    LFormattedText * p = new LFormattedText();
+    p->setImageScalingOptions(&_imgScalingOptions);
+    return p;
+}
+
 /// returns main element (i.e. FictionBook for FB2)
 ldomNode * lxmlDocBase::getRootNode()
 {
@@ -2697,10 +2706,11 @@ ldomDocument::~ldomDocument()
 #if BUILD_LITE!=1
 
 /// renders (formats) document in memory
-bool ldomDocument::setRenderProps( int width, int dy, bool showCover, int y0, font_ref_t def_font, int def_interline_space )
+bool ldomDocument::setRenderProps( int width, int dy, bool showCover, int y0, font_ref_t def_font, int def_interline_space, CRPropRef props )
 {
     bool changed = false;
     _renderedBlockCache.clear();
+    changed = _imgScalingOptions.update(props, def_font->getSize()) || changed;
     css_style_ref_t s( new css_style_rec_t );
     s->display = css_d_block;
     s->white_space = css_ws_normal;
@@ -2854,7 +2864,7 @@ void ldomDocument::applyDocumentStyleSheet()
 }
 
 
-int ldomDocument::render( LVRendPageList * pages, LVDocViewCallback * callback, int width, int dy, bool showCover, int y0, font_ref_t def_font, int def_interline_space )
+int ldomDocument::render( LVRendPageList * pages, LVDocViewCallback * callback, int width, int dy, bool showCover, int y0, font_ref_t def_font, int def_interline_space, CRPropRef props )
 {
     CRLog::info("Render is called for width %d, pageHeight=%d, fontFace=%s", width, dy, def_font->getTypeFace().c_str() );
     CRLog::trace("initializing default style...");
@@ -2864,7 +2874,7 @@ int ldomDocument::render( LVRendPageList * pages, LVDocViewCallback * callback, 
 //        styleHash = styleHash * 31 + calcGlobalSettingsHash();
 //        CRLog::debug("Style hash before setRenderProps: %x", styleHash);
 //    } //bool propsChanged =
-    setRenderProps( width, dy, showCover, y0, def_font, def_interline_space );
+    setRenderProps( width, dy, showCover, y0, def_font, def_interline_space, props );
 
     // update styles
 //    if ( getRootNode()->getStyle().isNull() || getRootNode()->getFont().isNull()
@@ -3165,6 +3175,9 @@ ldomElementWriter::ldomElementWriter(ldomDocument * document, lUInt16 nsid, lUIn
 {
     //logfile << "{c";
     _typeDef = _document->getElementTypePtr( id );
+    _flags = 0;
+    if ( (_typeDef && _typeDef->white_space==css_ws_pre) || (_parent && _parent->getFlags()&TXTFLG_PRE) )
+        _flags |= TXTFLG_PRE;
     _isSection = (id==el_section);
     _allowText = _typeDef ? _typeDef->allow_text : (_parent?true:false);
     if (_parent)
@@ -3182,10 +3195,7 @@ ldomElementWriter::ldomElementWriter(ldomDocument * document, lUInt16 nsid, lUIn
 
 lUInt32 ldomElementWriter::getFlags()
 {
-    lUInt32 flags = 0;
-    if ( _typeDef && _typeDef->white_space==css_ws_pre )
-        flags |= TXTFLG_PRE;
-    return flags;
+    return _flags;
 }
 
 static bool isBlockNode( ldomNode * node )
@@ -3301,26 +3311,31 @@ void ldomNode::autoboxChildren( int startIndex, int endIndex )
 #if BUILD_LITE!=1
     if ( !isElement() )
         return;
+    css_style_ref_t style = getStyle();
+    bool pre = ( style->white_space==css_ws_pre );
     int firstNonEmpty = startIndex;
     int lastNonEmpty = endIndex;
-    while ( firstNonEmpty<=endIndex && getChildNode(firstNonEmpty)->isText() ) {
-        lString16 s = getChildNode(firstNonEmpty)->getText();
-        if ( !IsEmptySpace(s.c_str(), s.length() ) )
-            break;
-        firstNonEmpty++;
-    }
-    while ( lastNonEmpty>=endIndex && getChildNode(lastNonEmpty)->isText() ) {
-        lString16 s = getChildNode(lastNonEmpty)->getText();
-        if ( !IsEmptySpace(s.c_str(), s.length() ) )
-            break;
-        lastNonEmpty--;
-    }
 
-    bool hasInline = false;
-    for ( int i=firstNonEmpty; i<=lastNonEmpty; i++ ) {
-        ldomNode * node = getChildNode(i);
-        if ( isInlineNode( node ) )
-            hasInline = true;
+    bool hasInline = pre;
+    if ( !pre ) {
+        while ( firstNonEmpty<=endIndex && getChildNode(firstNonEmpty)->isText() ) {
+            lString16 s = getChildNode(firstNonEmpty)->getText();
+            if ( !IsEmptySpace(s.c_str(), s.length() ) )
+                break;
+            firstNonEmpty++;
+        }
+        while ( lastNonEmpty>=endIndex && getChildNode(lastNonEmpty)->isText() ) {
+            lString16 s = getChildNode(lastNonEmpty)->getText();
+            if ( !IsEmptySpace(s.c_str(), s.length() ) )
+                break;
+            lastNonEmpty--;
+        }
+
+        for ( int i=firstNonEmpty; i<=lastNonEmpty; i++ ) {
+            ldomNode * node = getChildNode(i);
+            if ( isInlineNode( node ) )
+                hasInline = true;
+        }
     }
 
     if ( hasInline ) { //&& firstNonEmpty<=lastNonEmpty
@@ -3653,7 +3668,7 @@ void ldomElementWriter::onText( const lChar16 * text, int len, lUInt32 )
     {
         // normal mode: store text copy
         // add text node, if not first empty space string of block node
-        if ( !_isBlock || _element->getChildCount()!=0 || !IsEmptySpace( text, len ) )
+        if ( !_isBlock || _element->getChildCount()!=0 || !IsEmptySpace( text, len ) || (_flags&TXTFLG_PRE) )
             _element->insertChildText(lString16(text, len));
         else {
             //CRLog::trace("ldomElementWriter::onText: Ignoring first empty space of block item");
@@ -3885,7 +3900,7 @@ void ldomDocumentWriter::OnText( const lChar16 * text, int len, lUInt32 flags )
     if (_currNode)
     {
         if ( (_flags & XML_FLAG_NO_SPACE_TEXT)
-             && IsEmptySpace(text, len) )
+             && IsEmptySpace(text, len)  && !(flags & TXTFLG_PRE))
              return;
         if (_currNode->_allowText)
             _currNode->onText( text, len, flags );
@@ -4203,6 +4218,67 @@ public:
     }
 };
 
+img_scaling_option_t::img_scaling_option_t()
+{
+    mode = (MAX_IMAGE_SCALE_MUL>1) ? (ARBITRARY_IMAGE_SCALE_ENABLED==1 ? IMG_FREE_SCALING : IMG_INTEGER_SCALING) : IMG_NO_SCALE;
+    max_scale = (MAX_IMAGE_SCALE_MUL>1) ? MAX_IMAGE_SCALE_MUL : 1;
+}
+
+img_scaling_options_t::img_scaling_options_t()
+{
+    img_scaling_option_t option;
+    zoom_in_inline = option;
+    zoom_in_block = option;
+    zoom_out_inline = option;
+    zoom_out_block = option;
+}
+
+#define FONT_SIZE_BIG 32
+#define FONT_SIZE_VERY_BIG 50
+static bool updateScalingOption( img_scaling_option_t & v, CRPropRef props, int fontSize, bool zoomin, bool isInline )
+{
+    lString8 propName("crengine.image.scaling.");
+    propName << (zoomin ? "zoomin." : "zoomout.");
+    propName << (isInline ? "inline." : "block.");
+    lString8 propNameMode = propName + "mode";
+    lString8 propNameScale = propName + "scale";
+    img_scaling_option_t def;
+    int currMode = props->getIntDef(propNameMode.c_str(), (int)def.mode);
+    int currScale = props->getIntDef(propNameScale.c_str(), (int)def.max_scale);
+    if ( currScale==0 ) {
+        if ( fontSize>=FONT_SIZE_VERY_BIG )
+            currScale = 3;
+        else if ( fontSize>=FONT_SIZE_BIG )
+            currScale = 2;
+        else
+            currScale = 1;
+    }
+    if ( currScale==1 )
+        currMode = 0;
+    int updated = false;
+    if ( v.max_scale!=currScale ) {
+        updated = true;
+        v.max_scale = currScale;
+    }
+    if ( v.mode!=(img_scaling_mode_t)currMode ) {
+        updated = true;
+        v.mode = (img_scaling_mode_t)currMode;
+    }
+    props->setIntDef(propNameMode.c_str(), currMode);
+    props->setIntDef(propNameScale.c_str(), currScale);
+    return updated;
+}
+
+/// returns true if any changes occured
+bool img_scaling_options_t::update( CRPropRef props, int fontSize )
+{
+    bool updated = false;
+    updated = updateScalingOption( zoom_in_inline, props, fontSize, true, true ) || updated;
+    updated = updateScalingOption( zoom_in_block, props, fontSize, true, false ) || updated;
+    updated = updateScalingOption( zoom_out_inline, props, fontSize, false, true ) || updated;
+    updated = updateScalingOption( zoom_out_block, props, fontSize, false, false ) || updated;
+    return updated;
+}
 
 xpath_step_t ParseXPathStep( const lChar16 * &path, lString16 & name, int & index )
 {
@@ -5603,12 +5679,17 @@ bool ldomXPointerEx::isVisibleFinal()
 }
 
 /// move to next visible text node
-bool ldomXPointerEx::nextVisibleText()
+bool ldomXPointerEx::nextVisibleText( bool thisBlockOnly )
 {
-    while ( nextText() ) {
+    ldomXPointerEx backup;
+    if ( thisBlockOnly )
+        backup = *this;
+    while ( nextText(thisBlockOnly) ) {
         if ( isVisible() )
             return true;
     }
+    if ( thisBlockOnly )
+        *this = backup;
     return false;
 }
 
@@ -5630,20 +5711,23 @@ bool ldomXPointerEx::isVisible()
 }
 
 /// move to next text node
-bool ldomXPointerEx::nextText()
+bool ldomXPointerEx::nextText( bool thisBlockOnly )
 {
+    ldomNode * block = NULL;
+    if ( thisBlockOnly )
+        block = getThisBlockNode();
     setOffset( 0 );
     while ( firstChild() ) {
         if ( isText() )
-            return true;
+            return (!thisBlockOnly || getThisBlockNode()==block);
     }
     for (;;) {
         while ( nextSibling() ) {
             if ( isText() )
-                return true;
+                return (!thisBlockOnly || getThisBlockNode()==block);
             while ( firstChild() ) {
                 if ( isText() )
-                    return true;
+                    return (!thisBlockOnly || getThisBlockNode()==block);
             }
         }
         if ( !parent() )
@@ -5652,16 +5736,19 @@ bool ldomXPointerEx::nextText()
 }
 
 /// move to previous text node
-bool ldomXPointerEx::prevText()
+bool ldomXPointerEx::prevText( bool thisBlockOnly )
 {
+    ldomNode * block = NULL;
+    if ( thisBlockOnly )
+        block = getThisBlockNode();
     setOffset( 0 );
     for (;;) {
         while ( prevSibling() ) {
             if ( isText() )
-                return true;
+                return  (!thisBlockOnly || getThisBlockNode()==block);
             while ( lastChild() ) {
                 if ( isText() )
-                    return true;
+                    return (!thisBlockOnly || getThisBlockNode()==block);
             }
         }
         if ( !parent() )
@@ -5670,11 +5757,16 @@ bool ldomXPointerEx::prevText()
 }
 
 /// move to previous visible text node
-bool ldomXPointerEx::prevVisibleText()
+bool ldomXPointerEx::prevVisibleText( bool thisBlockOnly )
 {
-    while ( prevText() )
+    ldomXPointerEx backup;
+    if ( thisBlockOnly )
+        backup = *this;
+    while ( prevText( thisBlockOnly ) )
         if ( isVisible() )
             return true;
+    if ( thisBlockOnly )
+        *this = backup;
     return false;
 }
 
@@ -5699,7 +5791,7 @@ inline bool canWrapWordAfter( lChar16 ch ) {
 }
 
 /// move to previous visible word beginning
-bool ldomXPointerEx::prevVisibleWordStart()
+bool ldomXPointerEx::prevVisibleWordStart( bool thisBlockOnly )
 {
     if ( isNull() )
         return false;
@@ -5709,7 +5801,7 @@ bool ldomXPointerEx::prevVisibleWordStart()
     for ( ;; ) {
         if ( !isText() || !isVisible() || _data->getOffset()==0 ) {
             // move to previous text
-            if ( !prevVisibleText() )
+            if ( !prevVisibleText(thisBlockOnly) )
                 return false;
             node = getNode();
             text = node->getText();
@@ -5735,7 +5827,7 @@ bool ldomXPointerEx::prevVisibleWordStart()
 }
 
 /// move to previous visible word end
-bool ldomXPointerEx::prevVisibleWordEnd()
+bool ldomXPointerEx::prevVisibleWordEnd( bool thisBlockOnly )
 {
     if ( isNull() )
         return false;
@@ -5746,7 +5838,7 @@ bool ldomXPointerEx::prevVisibleWordEnd()
     for ( ;; ) {
         if ( !isText() || !isVisible() || _data->getOffset()==0 ) {
             // move to previous text
-            if ( !prevVisibleText() )
+            if ( !prevVisibleText(thisBlockOnly) )
                 return false;
             node = getNode();
             text = node->getText();
@@ -5782,7 +5874,7 @@ bool ldomXPointerEx::prevVisibleWordEnd()
 }
 
 /// move to next visible word beginning
-bool ldomXPointerEx::nextVisibleWordStart()
+bool ldomXPointerEx::nextVisibleWordStart( bool thisBlockOnly )
 {
     if ( isNull() )
         return false;
@@ -5793,7 +5885,7 @@ bool ldomXPointerEx::nextVisibleWordStart()
     for ( ;; ) {
         if ( !isText() || !isVisible() ) {
             // move to previous text
-            if ( !nextVisibleText() )
+            if ( !nextVisibleText(thisBlockOnly) )
                 return false;
             node = getNode();
             text = node->getText();
@@ -5807,7 +5899,7 @@ bool ldomXPointerEx::nextVisibleWordStart()
                 textLen = text.length();
                 if ( _data->getOffset() < textLen )
                     break;
-                if ( !nextVisibleText() )
+                if ( !nextVisibleText(thisBlockOnly) )
                     return false;
                 _data->setOffset( 0 );
             }
@@ -5837,7 +5929,7 @@ bool ldomXPointerEx::nextVisibleWordStart()
 }
 
 /// move to next visible word end
-bool ldomXPointerEx::nextVisibleWordEnd()
+bool ldomXPointerEx::nextVisibleWordEnd( bool thisBlockOnly )
 {
     if ( isNull() )
         return false;
@@ -5848,7 +5940,7 @@ bool ldomXPointerEx::nextVisibleWordEnd()
     for ( ;; ) {
         if ( !isText() || !isVisible() ) {
             // move to previous text
-            if ( !nextVisibleText() )
+            if ( !nextVisibleText(thisBlockOnly) )
                 return false;
             node = getNode();
             text = node->getText();
@@ -5862,7 +5954,7 @@ bool ldomXPointerEx::nextVisibleWordEnd()
                 textLen = text.length();
                 if ( _data->getOffset() < textLen )
                     break;
-                if ( !nextVisibleText() )
+                if ( !nextVisibleText(thisBlockOnly) )
                     return false;
                 _data->setOffset( 0 );
             }
@@ -5915,7 +6007,7 @@ bool ldomXPointerEx::isVisibleWordStart()
 /// returns true if current position is visible word end
 bool ldomXPointerEx::isVisibleWordEnd()
 {
-   if ( isNull() )
+    if ( isNull() )
         return false;
     if ( !isText() || !isVisible() )
         return false;
@@ -5928,6 +6020,214 @@ bool ldomXPointerEx::isVisibleWordEnd()
     if ( canWrapWordAfter(currCh) || !IsUnicodeSpace(currCh) && IsUnicodeSpaceOrNull(nextCh) )
         return true;
     return false;
+}
+
+/// returns block owner node of current node (or current node if it's block)
+ldomNode * ldomXPointerEx::getThisBlockNode()
+{
+    if ( isNull() )
+        return NULL;
+    ldomNode * node = getNode();
+    if ( node->isText() )
+        node = node->getParentNode();
+    for (;;) {
+        if ( !node )
+            return NULL;
+        lvdom_element_render_method rm = node->getRendMethod();
+        switch ( rm ) {
+        case erm_runin: // treat as separate block
+        case erm_block:
+        case erm_final:
+        case erm_mixed:
+        case erm_list_item:
+        case erm_table:
+        case erm_table_row_group:
+        case erm_table_row:
+        case erm_table_caption:
+            return node;
+        default:
+            break; // ignore
+        }
+        node = node->getParentNode();
+    }
+}
+
+/// returns true if points to last visible text inside block element
+bool ldomXPointerEx::isLastVisibleTextInBlock()
+{
+    if ( !isText() )
+        return false;
+    ldomXPointerEx pos(*this);
+    return !pos.nextVisibleText(true);
+}
+
+/// returns true if points to first visible text inside block element
+bool ldomXPointerEx::isFirstVisibleTextInBlock()
+{
+    if ( !isText() )
+        return false;
+    ldomXPointerEx pos(*this);
+    return !pos.prevVisibleText(true);
+}
+
+// sentence navigation
+
+/// returns true if points to beginning of sentence
+bool ldomXPointerEx::isSentenceStart()
+{
+    if ( isNull() )
+        return false;
+    if ( !isText() || !isVisible() )
+        return false;
+    ldomNode * node = getNode();
+    lString16 text = node->getText();
+    int textLen = text.length();
+    int i = _data->getOffset();
+    lChar16 currCh = i<textLen ? text[i] : 0;
+    lChar16 prevCh = i>0 ? text[i-1] : 0;
+    lChar16 prevNonSpace = 0;
+    for ( ;i>0; i-- ) {
+        lChar16 ch = text[i-1];
+        if ( !IsUnicodeSpace(ch) ) {
+            prevNonSpace = ch;
+            break;
+        }
+    }
+    if ( !prevNonSpace ) {
+        ldomXPointerEx pos(*this);
+        while ( !prevNonSpace && pos.prevVisibleText(true) ) {
+            lString16 prevText = pos.getText();
+            for ( int j=prevText.length()-1; j>=0; j-- ) {
+                lChar16 ch = prevText[j];
+                if ( !IsUnicodeSpace(ch) ) {
+                    prevNonSpace = ch;
+                    break;
+                }
+            }
+        }
+    }
+
+    if ( !IsUnicodeSpace(currCh) && IsUnicodeSpaceOrNull(prevCh) ) {
+        switch (prevNonSpace) {
+        case 0:
+        case '.':
+        case '?':
+        case '!':
+        case L'\x2026': // horizontal ellypsis
+            return true;
+        default:
+            return false;
+        }
+    }
+    return false;
+}
+
+/// returns true if points to end of sentence
+bool ldomXPointerEx::isSentenceEnd()
+{
+    if ( isNull() )
+        return false;
+    if ( !isText() || !isVisible() )
+        return false;
+    ldomNode * node = getNode();
+    lString16 text = node->getText();
+    int textLen = text.length();
+    int i = _data->getOffset();
+    lChar16 currCh = i<textLen ? text[i] : 0;
+    lChar16 prevCh = i>0 ? text[i-1] : 0;
+    if ( IsUnicodeSpaceOrNull(currCh) ) {
+        switch (prevCh) {
+        case 0:
+        case '.':
+        case '?':
+        case '!':
+        case L'\x2026': // horizontal ellypsis
+            return true;
+        default:
+            break;
+        }
+    }
+    // word is not ended with . ! ?
+    // check whether it's last word of block
+    ldomXPointerEx pos(*this);
+    return !pos.nextVisibleWordStart(true);
+}
+
+/// move to beginning of current visible text sentence
+bool ldomXPointerEx::thisSentenceStart()
+{
+    if ( isNull() )
+        return false;
+    if ( !isText() && !nextVisibleText() && !prevVisibleText() )
+        return false;
+    for (;;) {
+        if ( isSentenceStart() )
+            return true;
+        if ( !prevVisibleWordStart(true) )
+            return false;
+    }
+}
+
+/// move to end of current visible text sentence
+bool ldomXPointerEx::thisSentenceEnd()
+{
+    if ( isNull() )
+        return false;
+    if ( !isText() && !nextVisibleText() && !prevVisibleText() )
+        return false;
+    for (;;) {
+        if ( isSentenceEnd() )
+            return true;
+        if ( !nextVisibleWordEnd(true) )
+            return false;
+    }
+}
+
+/// move to beginning of next visible text sentence
+bool ldomXPointerEx::nextSentenceStart()
+{
+    if ( !isSentenceStart() && !thisSentenceEnd() )
+        return false;
+    for (;;) {
+        if ( !nextVisibleWordStart() )
+            return false;
+        if ( isSentenceStart() )
+            return true;
+    }
+}
+
+/// move to beginning of prev visible text sentence
+bool ldomXPointerEx::prevSentenceStart()
+{
+    if ( !thisSentenceStart() )
+        return false;
+    for (;;) {
+        if ( !prevVisibleWordStart() )
+            return false;
+        if ( isSentenceStart() )
+            return true;
+    }
+}
+
+/// move to end of next visible text sentence
+bool ldomXPointerEx::nextSentenceEnd()
+{
+    if ( !nextSentenceStart() )
+        return false;
+    return thisSentenceEnd();
+}
+
+/// move to end of next visible text sentence
+bool ldomXPointerEx::prevSentenceEnd()
+{
+    if ( !thisSentenceStart() )
+        return false;
+    for (;;) {
+        if ( !prevVisibleWordEnd() )
+            return false;
+        if ( isSentenceEnd() )
+            return true;
+    }
 }
 
 /// if start is after end, swap start and end
@@ -6897,7 +7197,7 @@ void ldomDocumentWriterFilter::OnText( const lChar16 * text, int len, lUInt32 fl
     {
         AutoClose( _currNode->_element->getNodeId(), false );
         if ( (_flags & XML_FLAG_NO_SPACE_TEXT)
-             && IsEmptySpace(text, len) )
+             && IsEmptySpace(text, len) && !(flags & TXTFLG_PRE))
              return;
         bool autoPara = _libRuDocumentDetected && (flags & TXTFLG_PRE);
         if (_currNode->_allowText) {
@@ -7430,6 +7730,7 @@ lUInt32 tinyNodeCollection::calcStyleHash()
             }
         }
     }
+    res = res * 31 + _imgScalingOptions.getHash();
     res = (res * 31 + globalHash) * 31 + docFlags;
 //    CRLog::info("Calculated style hash = %08x", res);
     return res;
@@ -9906,7 +10207,7 @@ int ldomNode::renderFinalBlock(  LFormattedTextRef & frmtext, RenderRectAccessor
         //CRLog::trace("Found existing formatted object for node #%08X", (lUInt32)this);
         return fmt->getHeight();
     }
-    f = new LFormattedText();
+    f = getDocument()->createFormattedText();
     if ( (rm != erm_final && rm != erm_list_item && rm != erm_table_caption) )
         return 0;
     //RenderRectAccessor fmt( this );
@@ -10553,6 +10854,7 @@ void runBasicTinyDomUnitTests()
 
 void runCHMUnitTest()
 {
+#if CHM_SUPPORT_ENABLED==1
 #if BUILD_LITE!=1
     LVStreamRef stream = LVOpenFileStream("/home/lve/src/test/mysql.chm", LVOM_READ);
     MYASSERT ( !stream.isNull(), "container stream opened" );
@@ -10576,6 +10878,7 @@ void runCHMUnitTest()
     MYASSERT( bytesRead==1000, "Read() -- bytesRead 2" );
     buf[999] = 0;
     CRLog::trace("CHM/index.html Contents 0: %s", buf);
+#endif
 #endif
 }
 

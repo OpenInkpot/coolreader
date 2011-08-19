@@ -11,6 +11,7 @@ import org.coolreader.crengine.BackgroundThread;
 import org.coolreader.crengine.BaseDialog;
 import org.coolreader.crengine.BookmarksDlg;
 import org.coolreader.crengine.CRDB;
+import org.coolreader.crengine.DeviceInfo;
 import org.coolreader.crengine.Engine;
 import org.coolreader.crengine.Engine.HyphDict;
 import org.coolreader.crengine.FileBrowser;
@@ -25,7 +26,9 @@ import org.coolreader.crengine.ReaderView;
 import org.coolreader.crengine.Scanner;
 import org.coolreader.crengine.TTS;
 import org.coolreader.crengine.TTS.OnTTSCreatedListener;
+import org.coolreader.crengine.EinkScreen;
 
+import android.R.drawable;
 import android.app.Activity;
 import android.app.SearchManager;
 import android.content.ActivityNotFoundException;
@@ -39,7 +42,9 @@ import android.content.pm.ActivityInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager.NameNotFoundException;
 import android.content.res.Configuration;
+import android.graphics.Color;
 import android.graphics.PixelFormat;
+import android.media.AudioManager;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Debug;
@@ -74,6 +79,11 @@ public class CoolReader extends Activity
 	History mHistory;
 	CRDB mDB;
 	private BackgroundThread mBackgroundThread;
+	
+	
+	public CoolReader() {
+	    brightnessHackError = DeviceInfo.SAMSUNG_BUTTONS_HIGHLIGHT_PATCH;
+	}
 	
 	public Scanner getScanner()
 	{
@@ -119,6 +129,29 @@ public class CoolReader extends Activity
 		pref.edit().putString(PREF_LAST_BOOK, filename).commit();
 	}
 	
+	private int mScreenUpdateMode = 0;
+	public int getScreenUpdateMode() {
+		return mScreenUpdateMode;
+	}
+	public void setScreenUpdateMode( int screenUpdateMode ) {
+		mScreenUpdateMode = screenUpdateMode;
+		if (EinkScreen.UpdateMode != screenUpdateMode) {
+			EinkScreen.UpdateMode = screenUpdateMode;
+			EinkScreen.ResetController(2);
+		}
+	}
+
+	private int mScreenUpdateInterval = 0;
+	public int getScreenUpdateInterval() {
+		return mScreenUpdateInterval;
+	}
+	public void setScreenUpdateInterval( int screenUpdateInterval ) {
+		mScreenUpdateInterval = screenUpdateInterval;
+		if (EinkScreen.UpdateModeInterval != screenUpdateInterval) {
+			EinkScreen.UpdateModeInterval = screenUpdateInterval;
+		}
+	}
+
 	private boolean mNightMode = false;
 	public boolean isNightMode() {
 		return mNightMode;
@@ -126,6 +159,7 @@ public class CoolReader extends Activity
 	public void setNightMode( boolean nightMode ) {
 		mNightMode = nightMode;
 	}
+
 	private boolean mFullscreen = false;
 	public boolean isFullscreen() {
 		return mFullscreen;
@@ -242,7 +276,7 @@ public class CoolReader extends Activity
 			            Context.POWER_SERVICE);
 				wl = pm.newWakeLock(
 			        PowerManager.SCREEN_BRIGHT_WAKE_LOCK
-			        | PowerManager.ON_AFTER_RELEASE,
+			        /* | PowerManager.ON_AFTER_RELEASE */,
 			        "cr3");
 			}
 			if ( !isStarted() ) {
@@ -350,6 +384,31 @@ public class CoolReader extends Activity
 		return true;
 	}
 	
+	private AudioManager am;
+	private int maxVolume;
+	public AudioManager getAudioManager() {
+		if ( am==null ) {
+			am = (AudioManager)getSystemService(AUDIO_SERVICE);
+			maxVolume = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+		}
+		return am;
+	}
+	
+	public int getVolume() {
+		AudioManager am = getAudioManager();
+		if (am!=null) {
+			return am.getStreamVolume(AudioManager.STREAM_MUSIC) * 100 / maxVolume;
+		}
+		return 0;
+	}
+	
+	public void setVolume( int volume ) {
+		AudioManager am = getAudioManager();
+		if (am!=null) {
+			am.setStreamVolume(AudioManager.STREAM_MUSIC, volume * maxVolume / 100, 0);
+		}
+	}
+	
 	/** Called when the activity is first created. */
     @Override
     public void onCreate(Bundle savedInstanceState)
@@ -359,6 +418,8 @@ public class CoolReader extends Activity
 		log.i("CoolReader.onCreate() entered");
 		super.onCreate(savedInstanceState);
 
+		setVolumeControlStream(AudioManager.STREAM_MUSIC);
+		
 		try {
 			PackageInfo pi = getPackageManager().getPackageInfo(getPackageName(), 0);
 			mVersion = pi.versionName;
@@ -455,6 +516,15 @@ public class CoolReader extends Activity
        	mHistory = new History(this, mDB);
 		mHistory.setCoverPagesEnabled(props.getBool(ReaderView.PROP_APP_SHOW_COVERPAGES, true));
 
+//		if ( DeviceInfo.FORCE_LIGHT_THEME ) {
+//			setTheme(android.R.style.Theme_Light);
+//			getWindow().setBackgroundDrawableResource(drawable.editbox_background);
+//		}
+		if ( DeviceInfo.FORCE_LIGHT_THEME ) {
+			mFrame.setBackgroundColor( Color.WHITE );
+			setTheme(R.style.Dialog_Fullscreen_Day);
+		}
+		
 		mReaderView = new ReaderView(this, mEngine, mBackgroundThread, props);
 		
 		mScanner.setDirScanEnabled(props.getBool(ReaderView.PROP_APP_BOOK_PROPERTY_SCAN_ENABLED, true));
@@ -506,7 +576,9 @@ public class CoolReader extends Activity
     }
     
     private int screenBacklightBrightness = -1; // use default
+    //private boolean brightnessHackError = false;
     private boolean brightnessHackError = false;
+    	    
     public void onUserActivity()
     {
     	if ( backlightControl==null )
@@ -727,6 +799,7 @@ public class CoolReader extends Activity
 		log.i("CoolReader.onResume()");
 		mPaused = false;
 		mIsStarted = true;
+		backlightControl.onUserActivity();
 		super.onResume();
 	}
 
@@ -1073,6 +1146,10 @@ public class CoolReader extends Activity
 				mBackgroundThread.executeGUI(new Runnable() {
 					public void run() {
 						OptionsDialog dlg = new OptionsDialog(_this, mReaderView, mFontFaces);
+						// reset controller if EINK
+						if (DeviceInfo.EINK_SCREEN) {
+							EinkScreen.ResetController(2);
+						}
 						dlg.show();
 					}
 				});
@@ -1221,6 +1298,19 @@ public class CoolReader extends Activity
 		new DefKeyAction(ReaderView.NOOK_KEY_PREV_LEFT, ReaderAction.NORMAL, ReaderAction.PAGE_UP),
 		new DefKeyAction(ReaderView.NOOK_KEY_PREV_RIGHT, ReaderAction.NORMAL, ReaderAction.PAGE_UP),
 		new DefKeyAction(ReaderView.NOOK_KEY_SHIFT_UP, ReaderAction.NORMAL, ReaderAction.PAGE_UP),
+		new DefKeyAction(ReaderView.KEYCODE_PAGE_BOTTOMLEFT, ReaderAction.NORMAL, ReaderAction.PAGE_UP),
+		new DefKeyAction(ReaderView.KEYCODE_PAGE_BOTTOMRIGHT, ReaderAction.NORMAL, ReaderAction.PAGE_UP),
+		new DefKeyAction(ReaderView.KEYCODE_PAGE_TOPLEFT, ReaderAction.NORMAL, ReaderAction.PAGE_DOWN),
+		new DefKeyAction(ReaderView.KEYCODE_PAGE_TOPRIGHT, ReaderAction.NORMAL, ReaderAction.PAGE_DOWN),
+		new DefKeyAction(ReaderView.KEYCODE_PAGE_BOTTOMLEFT, ReaderAction.LONG, ReaderAction.PAGE_UP_10),
+		new DefKeyAction(ReaderView.KEYCODE_PAGE_BOTTOMRIGHT, ReaderAction.LONG, ReaderAction.PAGE_UP_10),
+		new DefKeyAction(ReaderView.KEYCODE_PAGE_TOPLEFT, ReaderAction.LONG, ReaderAction.PAGE_DOWN_10),
+		new DefKeyAction(ReaderView.KEYCODE_PAGE_TOPRIGHT, ReaderAction.LONG, ReaderAction.PAGE_DOWN_10),
+//	    public static final int KEYCODE_PAGE_BOTTOMLEFT = 0x5d; // fwd
+//	    public static final int KEYCODE_PAGE_BOTTOMRIGHT = 0x5f; // fwd
+//	    public static final int KEYCODE_PAGE_TOPLEFT = 0x5c; // back
+//	    public static final int KEYCODE_PAGE_TOPRIGHT = 0x5e; // back
+		
 	};
 	private static DefTapAction[] DEF_TAP_ACTIONS = {
 		new DefTapAction(1, false, ReaderAction.PAGE_UP),
@@ -1287,9 +1377,22 @@ public class CoolReader extends Activity
         		props.applyDefault(ReaderView.PROP_APP_TAP_ZONE_ACTIONS_TAP + "." + ka.zone, ka.action.id);
         }
         
+        if ( DeviceInfo.EINK_SCREEN ) {
+    		props.applyDefault(ReaderView.PROP_PAGE_ANIMATION, ReaderView.PAGE_ANIMATION_NONE);
+        } else {
+    		props.applyDefault(ReaderView.PROP_PAGE_ANIMATION, ReaderView.PAGE_ANIMATION_SLIDE2);
+        }
+        
         props.applyDefault(ReaderView.PROP_APP_SCREEN_BACKLIGHT_LOCK, "0");
         props.applyDefault(ReaderView.PROP_APP_BOOK_PROPERTY_SCAN_ENABLED, "1");
-        props.applyDefault(ReaderView.PROP_FONT_SIZE, "20");
+        // autodetect best initial font size based on display resolution
+        int screenWidth = getWindowManager().getDefaultDisplay().getWidth();
+        int fontSize = 20;
+        if ( screenWidth>=400 )
+        	fontSize = 24;
+        else if ( screenWidth>=600 )
+        	fontSize = 28;
+        props.applyDefault(ReaderView.PROP_FONT_SIZE, String.valueOf(fontSize));
         props.applyDefault(ReaderView.PROP_FONT_FACE, "Droid Sans");
         props.applyDefault(ReaderView.PROP_STATUS_FONT_FACE, "Droid Sans");
         props.applyDefault(ReaderView.PROP_STATUS_FONT_SIZE, "16");
@@ -1313,7 +1416,6 @@ public class CoolReader extends Activity
 		props.applyDefault(ReaderView.PROP_FONT_ANTIALIASING, "2");
 		props.applyDefault(ReaderView.PROP_APP_SHOW_COVERPAGES, "1");
 		props.applyDefault(ReaderView.PROP_APP_SCREEN_ORIENTATION, "4");
-		props.applyDefault(ReaderView.PROP_PAGE_ANIMATION, ReaderView.PAGE_ANIMATION_SLIDE2);
 		props.applyDefault(ReaderView.PROP_CONTROLS_ENABLE_VOLUME_KEYS, "1");
 		props.applyDefault(ReaderView.PROP_APP_TAP_ZONE_HILIGHT, "0");
 		props.applyDefault(ReaderView.PROP_APP_BOOK_SORT_ORDER, FileInfo.DEF_SORT_ORDER.name());
@@ -1322,20 +1424,37 @@ public class CoolReader extends Activity
 		props.applyDefault(ReaderView.PROP_APP_SELECTION_ACTION, "0");
 		//props.applyDefault(ReaderView.PROP_FALLBACK_FONT_FACE, "Droid Fallback");
 		props.put(ReaderView.PROP_FALLBACK_FONT_FACE, "Droid Sans Fallback");
+
+		props.applyDefault(ReaderView.PROP_IMG_SCALING_ZOOMOUT_BLOCK_MODE, "1");
+		props.applyDefault(ReaderView.PROP_IMG_SCALING_ZOOMIN_BLOCK_MODE, "1");
+		props.applyDefault(ReaderView.PROP_IMG_SCALING_ZOOMOUT_INLINE_MODE, "1");
+		props.applyDefault(ReaderView.PROP_IMG_SCALING_ZOOMIN_INLINE_MODE, "1");
+		props.applyDefault(ReaderView.PROP_IMG_SCALING_ZOOMOUT_BLOCK_SCALE, "0");
+		props.applyDefault(ReaderView.PROP_IMG_SCALING_ZOOMIN_BLOCK_SCALE, "0");
+		props.applyDefault(ReaderView.PROP_IMG_SCALING_ZOOMOUT_INLINE_SCALE, "0");
+		props.applyDefault(ReaderView.PROP_IMG_SCALING_ZOOMIN_INLINE_SCALE, "0");
 		
 		props.applyDefault(ReaderView.PROP_PAGE_MARGIN_LEFT, densityDpi > 160 ? "10" : "4");
 		props.applyDefault(ReaderView.PROP_PAGE_MARGIN_RIGHT, densityDpi > 160 ? "10" : "4");
 		props.applyDefault(ReaderView.PROP_PAGE_MARGIN_TOP, densityDpi > 160 ? "8" : "2");
 		props.applyDefault(ReaderView.PROP_PAGE_MARGIN_BOTTOM, densityDpi > 160 ? "8" : "2");
 		
+        props.applyDefault(ReaderView.PROP_APP_SCREEN_UPDATE_MODE, "0");
+        props.applyDefault(ReaderView.PROP_APP_SCREEN_UPDATE_INTERVAL, "10");
+        
         props.applyDefault(ReaderView.PROP_NIGHT_MODE, "0");
-        if ( props.getBool(ReaderView.PROP_NIGHT_MODE, false) )
-        	props.applyDefault(ReaderView.PROP_PAGE_BACKGROUND_IMAGE, Engine.DEF_NIGHT_BACKGROUND_TEXTURE);
-        else
-        	props.applyDefault(ReaderView.PROP_PAGE_BACKGROUND_IMAGE, Engine.DEF_DAY_BACKGROUND_TEXTURE);
+        if (DeviceInfo.EINK_SCREEN) {
+        	props.applyDefault(ReaderView.PROP_PAGE_BACKGROUND_IMAGE, Engine.NO_TEXTURE.id);
+        } else {
+        	if ( props.getBool(ReaderView.PROP_NIGHT_MODE, false) )
+        		props.applyDefault(ReaderView.PROP_PAGE_BACKGROUND_IMAGE, Engine.DEF_NIGHT_BACKGROUND_TEXTURE);
+        	else
+        		props.applyDefault(ReaderView.PROP_PAGE_BACKGROUND_IMAGE, Engine.DEF_DAY_BACKGROUND_TEXTURE);
+        }
         props.applyDefault(ReaderView.PROP_PAGE_BACKGROUND_IMAGE_DAY, Engine.DEF_DAY_BACKGROUND_TEXTURE);
         props.applyDefault(ReaderView.PROP_PAGE_BACKGROUND_IMAGE_NIGHT, Engine.DEF_NIGHT_BACKGROUND_TEXTURE);
         
+        props.applyDefault(ReaderView.PROP_FONT_GAMMA, "1.0");
 		
 		props.setProperty(ReaderView.PROP_MIN_FILE_SIZE_TO_CACHE, "100000");
 		props.setProperty(ReaderView.PROP_FORCED_MIN_FILE_SIZE_TO_CACHE, "32768");

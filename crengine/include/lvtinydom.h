@@ -107,6 +107,36 @@ typedef enum {
 } xpath_step_t;
 xpath_step_t ParseXPathStep( const lChar8 * &path, lString8 & name, int & index );
 
+/// type of image scaling
+typedef enum {
+    IMG_NO_SCALE, /// scaling is disabled
+    IMG_INTEGER_SCALING, /// integer multipier/divisor scaling -- *2, *3 only
+    IMG_FREE_SCALING, /// free scaling, non-integer factor
+} img_scaling_mode_t;
+
+/// image scaling option
+struct img_scaling_option_t {
+    img_scaling_mode_t mode;
+    int max_scale;
+    int getHash() { return (int)mode * 33 + max_scale; }
+    // creates default option value
+    img_scaling_option_t();
+};
+
+/// set of images scaling options for different kind of images
+struct img_scaling_options_t {
+    img_scaling_option_t zoom_in_inline;
+    img_scaling_option_t zoom_in_block;
+    img_scaling_option_t zoom_out_inline;
+    img_scaling_option_t zoom_out_block;
+    /// returns hash value
+    int getHash() { return (((zoom_in_inline.getHash()*33 + zoom_in_block.getHash())*33 + zoom_out_inline.getHash())*33 + zoom_out_block.getHash()); }
+    /// creates default options
+    img_scaling_options_t();
+    /// returns true if any changes occured
+    bool update( CRPropRef props, int fontSize );
+};
+
 //#if BUILD_LITE!=1
 struct DataStorageItemHeader;
 struct TextDataStorageItem;
@@ -341,6 +371,9 @@ protected:
     CacheFile * _cacheFile;
     bool _mapped;
     bool _maperror;
+
+    img_scaling_options_t _imgScalingOptions;
+
 
     int calcFinalBlocks();
     void dropStyles();
@@ -953,6 +986,9 @@ public:
 #endif
 
 
+    /// create formatted text object with options set
+    LFormattedText * createFormattedText();
+
 protected:
 #if BUILD_LITE!=1
     struct DocFileHeader {
@@ -1305,21 +1341,48 @@ public:
     /// returns true if current node is visible element or text
     bool isVisible();
     /// move to next text node
-    bool nextText();
+    bool nextText( bool thisBlockOnly = false );
     /// move to previous text node
-    bool prevText();
+    bool prevText( bool thisBlockOnly = false );
     /// move to next visible text node
-    bool nextVisibleText();
+    bool nextVisibleText( bool thisBlockOnly = false );
     /// move to previous visible text node
-    bool prevVisibleText();
+    bool prevVisibleText( bool thisBlockOnly = false );
+
     /// move to previous visible word beginning
-    bool prevVisibleWordStart();
+    bool prevVisibleWordStart( bool thisBlockOnly = false );
     /// move to previous visible word end
-    bool prevVisibleWordEnd();
+    bool prevVisibleWordEnd( bool thisBlockOnly = false );
     /// move to next visible word beginning
-    bool nextVisibleWordStart();
+    bool nextVisibleWordStart( bool thisBlockOnly = false );
     /// move to next visible word end
-    bool nextVisibleWordEnd();
+    bool nextVisibleWordEnd( bool thisBlockOnly = false );
+
+    /// move to beginning of current visible text sentence
+    bool thisSentenceStart();
+    /// move to end of current visible text sentence
+    bool thisSentenceEnd();
+    /// move to beginning of next visible text sentence
+    bool nextSentenceStart();
+    /// move to beginning of next visible text sentence
+    bool prevSentenceStart();
+    /// move to end of next visible text sentence
+    bool nextSentenceEnd();
+    /// move to end of prev visible text sentence
+    bool prevSentenceEnd();
+    /// returns true if points to beginning of sentence
+    bool isSentenceStart();
+    /// returns true if points to end of sentence
+    bool isSentenceEnd();
+
+    /// returns true if points to last visible text inside block element
+    bool isLastVisibleTextInBlock();
+    /// returns true if points to first visible text inside block element
+    bool isFirstVisibleTextInBlock();
+
+    /// returns block owner node of current node (or current node if it's block)
+    ldomNode * getThisBlockNode();
+
     /// returns true if current position is visible word beginning
     bool isVisibleWordStart();
     /// returns true if current position is visible word end
@@ -1445,6 +1508,13 @@ public:
         if ( _start.compare( _end ) > 0 )
             return true;
         return false;
+    }
+    /// makes range empty
+    void clear()
+    {
+        _start.clear();
+        _end.clear();
+        _flags = 0;
     }
     /// returns true if pointer position is inside range
     bool isInside( const ldomXPointerEx & p ) const
@@ -1890,9 +1960,9 @@ public:
     virtual ~ldomDocument();
 #if BUILD_LITE!=1
     /// renders (formats) document in memory
-    virtual int render( LVRendPageList * pages, LVDocViewCallback * callback, int width, int dy, bool showCover, int y0, font_ref_t def_font, int def_interline_space );
+    virtual int render( LVRendPageList * pages, LVDocViewCallback * callback, int width, int dy, bool showCover, int y0, font_ref_t def_font, int def_interline_space, CRPropRef props );
     /// renders (formats) document in memory
-    virtual bool setRenderProps( int width, int dy, bool showCover, int y0, font_ref_t def_font, int def_interline_space );
+    virtual bool setRenderProps( int width, int dy, bool showCover, int y0, font_ref_t def_font, int def_interline_space, CRPropRef props );
 #endif
     /// create xpointer from pointer string
     ldomXPointer createXPointer( const lString16 & xPointerStr );
@@ -1939,6 +2009,7 @@ class ldomElementWriter
     bool _isSection;
     bool _stylesheetIsSet;
     bool _bodyEnterCalled;
+    lUInt32 _flags;
     lUInt32 getFlags();
     void updateTocItem();
     void onBodyEnter();
