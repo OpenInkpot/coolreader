@@ -75,7 +75,7 @@
 #define PROP_MIN_FILE_SIZE_TO_CACHE  "crengine.cache.filesize.min"
 #define PROP_FORCED_MIN_FILE_SIZE_TO_CACHE  "crengine.cache.forced.filesize.min"
 #define PROP_PROGRESS_SHOW_FIRST_PAGE  "crengine.progress.show.first.page"
-
+#define PROP_HIGHLIGHT_COMMENT_BOOKMARKS "crengine.highlight.bookmarks"
 // image scaling settings
 // mode: 0=disabled, 1=integer scaling factors, 2=free scaling
 // scale: 0=auto based on font size, 1=no zoom, 2=scale up to *2, 3=scale up to *3
@@ -95,6 +95,12 @@ typedef enum {
     txt_format_pre,  // no formatting, leave lines as is
     txt_format_auto  // autodetect format
 } txt_format_t;
+
+/// no battery
+#define CR_BATTERY_STATE_NO_BATTERY -2
+/// battery is charging
+#define CR_BATTERY_STATE_CHARGING -1
+// values 0..100 -- battery life percent
 
 #ifndef CR_ENABLE_PAGE_IMAGE_CACHE
 #ifdef ANDROID
@@ -242,6 +248,8 @@ public:
     ldomWordEx * appendPattern( lString16 chars );
     // remove last item from pattern
     ldomWordEx * reducePattern();
+    // selects word of current page with specified coords;
+    void selectWord(int x, int y);
 };
 
 
@@ -285,6 +293,8 @@ enum LVDocCmd
     DCMD_SELECT_FIRST_SENTENCE, // select first sentence on page
     DCMD_SELECT_NEXT_SENTENCE, // nove selection to next sentence
     DCMD_SELECT_PREV_SENTENCE, // nove selection to next sentence
+    DCMD_SELECT_MOVE_LEFT_BOUND_BY_WORDS, // move selection start by words
+    DCMD_SELECT_MOVE_RIGHT_BOUND_BY_WORDS, // move selection end by words
 
     //=======================================
     DCMD_EDIT_CURSOR_LEFT,
@@ -338,6 +348,7 @@ enum {
 
 //typedef lUInt64 LVPosBookmark;
 
+typedef LVArray<int> LVBookMarkPercentInfo;
 
 #define DEF_COLOR_BUFFER_BPP 32
 
@@ -398,12 +409,14 @@ private:
     LVImageSourceRef m_backgroundImage;
     LVRef<LVColorDrawBuf> m_backgroundImageScaled;
     bool m_backgroundTiled;
-
+    bool m_highlightBookmarks;
+    LVPtrVector<LVBookMarkPercentInfo> m_bookmarksPercents;
 
 protected:
     lString16 m_last_clock;
 
     ldomMarkedRangeList m_markRanges;
+    ldomMarkedRangeList m_bmkRanges;
 
 private:
     lString16 m_filename;
@@ -475,6 +488,7 @@ private:
     bool ParseDocument( );
     /// format of document from cache is known
     virtual void OnCacheFileFormatDetected( doc_format_t fmt );
+    void insertBookmarkPercentInfo(int start_page, int end_y, int percent);
 
 protected:
     /// draw to specified buffer by either Y pos or page number (unused param should be -1)
@@ -528,6 +542,12 @@ public:
     void setCursorPos( ldomXPointer ptr ) { m_cursorPos = ptr; }
     /// try swappping of document to cache, if size is big enough, and no swapping attempt yet done
     void swapToCache();
+    /// save document to cache file, with timeout option
+    ContinuousOperationResult swapToCache(CRTimerUtil & maxTime);
+    /// save unsaved data to cache file (if one is created), with timeout option
+    ContinuousOperationResult updateCache(CRTimerUtil & maxTime);
+    /// save unsaved data to cache file (if one is created), w/o timeout
+    ContinuousOperationResult updateCache();
 
     /// returns selected (marked) ranges
     ldomMarkedRangeList * getMarkedRanges() { return &m_markRanges; }
@@ -589,7 +609,7 @@ public:
 
     // callback functions
     /// set callback
-    void setCallback( LVDocViewCallback * callback ) { m_callback = callback; }
+    LVDocViewCallback * setCallback( LVDocViewCallback * callback ) { LVDocViewCallback * old = m_callback; m_callback = callback; return old; }
     /// get callback
     LVDocViewCallback * getCallback( ) { return m_callback; }
 
@@ -665,6 +685,7 @@ public:
     LVMutex & getMutex() { return _mutex; }
     /// update selection ranges
     void updateSelections();
+    void updateBookMarksRanges();
     /// get page document range, -1 for current page
     LVRef<ldomXRange> getPageDocumentRange( int pageIndex=-1 );
     /// get page text, -1 for current page
@@ -886,6 +907,8 @@ public:
     void GetPos( lvRect & rc );
     /// set vertical position of view inside document
     int SetPos( int pos, bool savePos=true );
+
+	int getPageHeight(int pageIndex);
 
     /// get number of current page
     int getCurPage();

@@ -12,12 +12,16 @@
 *******************************************************/
 
 /// change in case of incompatible changes in swap/cache file format to avoid using incompatible swap file
-#define CACHE_FILE_FORMAT_VERSION "3.03.13"
+#define CACHE_FILE_FORMAT_VERSION "3.04.02"
 
 #ifndef DOC_DATA_COMPRESSION_LEVEL
 /// data compression level (0=no compression, 1=fast compressions, 3=normal compression)
 #define DOC_DATA_COMPRESSION_LEVEL 1 // 0, 1, 3 (0=no compression)
 #endif
+
+#ifndef STREAM_AUTO_SYNC_SIZE
+#define STREAM_AUTO_SYNC_SIZE 300000
+#endif //STREAM_AUTO_SYNC_SIZE
 
 //=====================================================
 // Document data caching parameters
@@ -114,6 +118,8 @@ enum CacheFileBlockType {
     CBT_REND_PARAMS,
     CBT_TOC_DATA,
     CBT_STYLE_DATA,
+    CBT_BLOB_INDEX,
+    CBT_BLOB_DATA,
 };
 
 
@@ -333,26 +339,37 @@ struct CacheFileItem
 };
 
 
-struct CacheFileHeader
+struct SimpleCacheFileHeader
 {
     char _magic[CACHE_FILE_MAGIC_SIZE]; // magic
+    lUInt32 _dirty;
+    SimpleCacheFileHeader( lUInt32 dirtyFlag ) {
+        memset( _magic, 0, sizeof(_magic));
+        memcpy( _magic, CACHE_FILE_MAGIC, CACHE_FILE_MAGIC_SIZE );
+        _dirty = dirtyFlag;
+    }
+};
+
+struct CacheFileHeader : public SimpleCacheFileHeader
+{
     lUInt32 _fsize;
     CacheFileItem _indexBlock; // index array block parameters,
     // duplicate of one of index records which contains
-
     bool validate()
     {
         if ( memcmp( _magic, CACHE_FILE_MAGIC, CACHE_FILE_MAGIC_SIZE ) ) {
             CRLog::error("CacheFileHeader::validate: magic doesn't match");
             return false;
         }
+        if ( _dirty!=0 ) {
+            CRLog::error("CacheFileHeader::validate: dirty flag is set");
+            return false;
+        }
         return true;
     }
-    CacheFileHeader( CacheFileItem * indexRec, int fsize )
-    : _indexBlock(0,0)
+    CacheFileHeader( CacheFileItem * indexRec, int fsize, lUInt32 dirtyFlag )
+    : SimpleCacheFileHeader(dirtyFlag), _indexBlock(0,0)
     {
-        memset( _magic, 0, sizeof(_magic));
-        memcpy( _magic, CACHE_FILE_MAGIC, CACHE_FILE_MAGIC_SIZE );
         if ( indexRec )
             memcpy( &_indexBlock, indexRec, sizeof(CacheFileItem));
         else
@@ -369,6 +386,7 @@ class CacheFile
     int _sectorSize; // block position and size granularity
     int _size;
     bool _indexChanged;
+    bool _dirty;
     LVStreamRef _stream; // file stream
     LVPtrVector<CacheFileItem, true> _index; // full file block index
     LVPtrVector<CacheFileItem, false> _freeIndex; // free file block index
@@ -422,35 +440,76 @@ public:
     {
         return read(type, 0, buf);
     }
+    /// reads block as a stream
+    LVStreamRef readStream(lUInt16 type, lUInt16 index);
 
+    /// sets dirty flag value, returns true if value is changed
+    bool setDirtyFlag( bool dirty );
     // flushes index
-    bool flush( bool sync );
+    bool flush( bool clearDirtyFlag, CRTimerUtil & maxTime );
     int roundSector( int n )
     {
         return (n + (_sectorSize-1)) & ~(_sectorSize-1);
+    }
+    void setAutoSyncSize(int sz) {
+        _stream->setAutoSyncSize(sz);
     }
 };
 
 
 // create uninitialized cache file, call open or create to initialize
 CacheFile::CacheFile()
-: _sectorSize( CACHE_FILE_SECTOR_SIZE ), _size(0), _indexChanged(false), _map(1024)
+: _sectorSize( CACHE_FILE_SECTOR_SIZE ), _size(0), _indexChanged(false), _dirty(true), _map(1024)
 {
 }
 
 // free resources
 CacheFile::~CacheFile()
 {
-    if ( !_stream.isNull() )
-        flush( true );
+    if ( !_stream.isNull() ) {
+        // don't flush -- leave file dirty
+        //CRTimerUtil infinite;
+        //flush( true, infinite );
+    }
+}
+
+/// sets dirty flag value, returns true if value is changed
+bool CacheFile::setDirtyFlag( bool dirty )
+{
+    if ( _dirty==dirty )
+        return false;
+    if ( !dirty ) {
+        CRLog::info("CacheFile::clearing Dirty flag");
+        _stream->Flush(true);
+    } else {
+        CRLog::info("CacheFile::setting Dirty flag");
+    }
+    _dirty = dirty;
+    SimpleCacheFileHeader hdr(_dirty?1:0);
+    _stream->SetPos(0);
+    lvsize_t bytesWritten = 0;
+    _stream->Write(&hdr, sizeof(hdr), &bytesWritten );
+    if ( bytesWritten!=sizeof(hdr) )
+        return false;
+    _stream->Flush(true);
+    //CRLog::trace("setDirtyFlag : hdr is saved with Dirty flag = %d", hdr._dirty);
+    return true;
 }
 
 // flushes index
-bool CacheFile::flush( bool sync )
+bool CacheFile::flush( bool clearDirtyFlag, CRTimerUtil & maxTime )
 {
-    if ( !writeIndex() )
-        return false;
-    return _stream->Flush( sync )==LVERR_OK;
+    if ( clearDirtyFlag ) {
+        //setDirtyFlag(true);
+        if ( !writeIndex() )
+            return false;
+        setDirtyFlag(false);
+    } else {
+        CRTimerUtil timer;
+        _stream->Flush(false, maxTime);
+        //CRLog::trace("CacheFile->flush() took %d ms ", (int)timer.elapsed());
+    }
+    return true;
 }
 
 // reads all blocks of index and checks CRCs
@@ -473,12 +532,13 @@ bool CacheFile::validateContents()
 // reads index from file
 bool CacheFile::readIndex()
 {
-    CacheFileHeader hdr(NULL, _size);
+    CacheFileHeader hdr(NULL, _size, 0);
     _stream->SetPos(0);
     lvsize_t bytesRead = 0;
     _stream->Read(&hdr, sizeof(hdr), &bytesRead );
     if ( bytesRead!=sizeof(hdr) )
         return false;
+    CRLog::info("Header read: DirtyFlag=%d", hdr._dirty);
     if ( !hdr.validate() )
         return false;
     if ( (int)hdr._fsize > _size + 4096-1 ) {
@@ -570,12 +630,13 @@ bool CacheFile::writeIndex()
 // writes file header
 bool CacheFile::updateHeader( CacheFileItem * indexItem )
 {
-    CacheFileHeader hdr(indexItem, _size);
+    CacheFileHeader hdr(indexItem, _size, _dirty?1:0);
     _stream->SetPos(0);
     lvsize_t bytesWritten = 0;
     _stream->Write(&hdr, sizeof(hdr), &bytesWritten );
     if ( bytesWritten!=sizeof(hdr) )
         return false;
+    //CRLog::trace("updateHeader finished: Dirty flag = %d", hdr._dirty);
     return true;
 }
 
@@ -588,6 +649,23 @@ void CacheFile::freeBlock( CacheFileItem * block )
     block->_dataType = 0;
     block->_dataSize = 0;
     _freeIndex.add( block );
+}
+
+/// reads block as a stream
+LVStreamRef CacheFile::readStream(lUInt16 type, lUInt16 index)
+{
+    CacheFileItem * block = findBlock(type, index);
+    if (block && block->_dataSize) {
+#if 0
+        lUInt8 * buf = NULL;
+        int size = 0;
+        if (read(type, index, buf, size))
+            return LVCreateMemoryStream(buf, size);
+#else
+        return LVStreamRef(new LVStreamFragment(_stream, block->_blockFilePos, block->_dataSize));
+#endif
+    }
+    return LVStreamRef();
 }
 
 // searches for existing block
@@ -754,6 +832,7 @@ bool CacheFile::read( lUInt16 type, lUInt16 dataIndex, lUInt8 * &buf, int &size 
 // writes block to file
 bool CacheFile::write( lUInt16 type, lUInt16 dataIndex, const lUInt8 * buf, int size, bool compress )
 {
+    setDirtyFlag(true);
     // check whether data is changed
     lUInt64 newhash = calcHash64( buf, size );
     CacheFileItem * existingblock = findBlock( type, dataIndex );
@@ -862,11 +941,14 @@ bool CacheFile::open( lString16 filename )
     }
     return open(stream);
 }
+
+
 // try open existing cache file
 bool CacheFile::open( LVStreamRef stream )
 {
     _stream = stream;
     _size = _stream->GetSize();
+    //_stream->setAutoSyncSize(STREAM_AUTO_SYNC_SIZE);
 
     if ( !readIndex() ) {
         CRLog::error("CacheFile::open : cannot read index from file");
@@ -894,6 +976,7 @@ bool CacheFile::create( lString16 filename )
 bool CacheFile::create( LVStreamRef stream )
 {
     _stream = stream;
+    //_stream->setAutoSyncSize(STREAM_AUTO_SYNC_SIZE);
     if ( _stream->SetPos(0)!=0 ) {
         CRLog::error( "CacheFile::create: cannot seek file");
         _stream.Clear();
@@ -914,6 +997,167 @@ bool CacheFile::create( LVStreamRef stream )
         return false;
     }
     return true;
+}
+
+// BLOB storage
+
+class ldomBlobItem {
+    int _storageIndex;
+    lString16 _name;
+    int _size;
+    lUInt8 * _data;
+public:
+    ldomBlobItem( lString16 name ) : _storageIndex(-1), _name(name), _size(0), _data(NULL) {
+
+    }
+    ~ldomBlobItem() {
+        if ( _data )
+            delete[] _data;
+    }
+    int getSize() { return _size; }
+    int getIndex() { return _storageIndex; }
+    lUInt8 * getData() { return _data; }
+    lString16 getName() { return _name; }
+    void setIndex(int index, int size) {
+        if ( _data )
+            delete[] _data;
+        _data = NULL;
+        _storageIndex = index;
+        _size = size;
+    }
+    void setData( const lUInt8 * data, int size ) {
+        if ( _data )
+            delete[] _data;
+        if (data && size>0) {
+            _data = new lUInt8[size];
+            memcpy(_data, data, size);
+            _size = size;
+        } else {
+            _data = NULL;
+            _size = -1;
+        }
+    }
+};
+
+ldomBlobCache::ldomBlobCache() : _cacheFile(NULL), _changed(false)
+{
+
+}
+
+#define BLOB_INDEX_MAGIC "BLOBINDX"
+
+bool ldomBlobCache::loadIndex()
+{
+    bool res = true;
+    SerialBuf buf(0,true);
+    res = _cacheFile->read(CBT_BLOB_INDEX, buf);
+    if (!res) {
+        _list.clear();
+        return true; // missing blob index: treat as empty list of blobs
+    }
+    if (!buf.checkMagic(BLOB_INDEX_MAGIC))
+        return false;
+    lUInt32 len;
+    buf >> len;
+    for ( lUInt32 i = 0; i<len; i++ ) {
+        lString16 name;
+        buf >> name;
+        lUInt32 size;
+        buf >> size;
+        if (buf.error())
+            break;
+        ldomBlobItem * item = new ldomBlobItem(name);
+        item->setIndex(i, size);
+        _list.add(item);
+    }
+    res = !buf.error();
+    return res;
+}
+
+bool ldomBlobCache::saveIndex()
+{
+    bool res = true;
+    SerialBuf buf(0,true);
+    buf.putMagic(BLOB_INDEX_MAGIC);
+    lUInt32 len = _list.length();
+    buf << len;
+    for ( lUInt32 i = 0; i<len; i++ ) {
+        ldomBlobItem * item = _list[i];
+        buf << item->getName();
+        buf << (lUInt32)item->getSize();
+    }
+    res = _cacheFile->write( CBT_BLOB_INDEX, buf, false );
+    return res;
+}
+
+ContinuousOperationResult ldomBlobCache::saveToCache(CRTimerUtil & timeout)
+{
+    if (!_list.length() || !_changed || _cacheFile==NULL)
+        return CR_DONE;
+    bool res = true;
+    for ( int i=0; i<_list.length(); i++ ) {
+        ldomBlobItem * item = _list[i];
+        if ( item->getData() ) {
+            res = _cacheFile->write(CBT_BLOB_DATA, i, item->getData(), item->getSize(), false) && res;
+            if (res)
+                item->setIndex(i, item->getSize());
+        }
+        if (timeout.expired())
+            return CR_TIMEOUT;
+    }
+    res = saveIndex() && res;
+    if ( res )
+        _changed = false;
+    return res ? CR_DONE : CR_ERROR;
+}
+
+void ldomBlobCache::setCacheFile( CacheFile * cacheFile )
+{
+    _cacheFile = cacheFile;
+    CRTimerUtil infinite;
+    if (_list.empty())
+        loadIndex();
+    else
+        saveToCache(infinite);
+}
+
+bool ldomBlobCache::addBlob( const lUInt8 * data, int size, lString16 name )
+{
+    CRLog::debug("ldomBlobCache::addBlob( %s, size=%d, [%02x,%02x,%02x,%02x] )", LCSTR(name), size, data[0], data[1], data[2], data[3]);
+    int index = _list.length();
+    ldomBlobItem * item = new ldomBlobItem(name);
+    if (_cacheFile != NULL) {
+        _cacheFile->write(CBT_BLOB_DATA, index, data, size, false);
+        item->setIndex(index, size);
+    } else {
+        item->setData(data, size);
+    }
+    _list.add(item);
+    _changed = true;
+    return true;
+}
+
+LVStreamRef ldomBlobCache::getBlob( lString16 name )
+{
+    ldomBlobItem * item = NULL;
+    lUInt16 index = 0;
+    for ( int i=0; i<_list.length(); i++ ) {
+        if (_list[i]->getName() == name) {
+            item = _list[i];
+            index = i;
+            break;
+        }
+    }
+    if (item) {
+        if (item->getData()) {
+            // RAM
+            return LVCreateMemoryStream(item->getData(), item->getSize(), true);
+        } else {
+            // CACHE FILE
+            return _cacheFile->readStream(CBT_BLOB_DATA, index);
+        }
+    }
+    return LVStreamRef();
 }
 
 #if BUILD_LITE!=1
@@ -1171,6 +1415,7 @@ tinyNodeCollection::tinyNodeCollection()
 , _cacheFile(NULL)
 , _mapped(false)
 , _maperror(false)
+, _mapSavingStage(0)
 #endif
 , _textStorage(this, 't', TEXT_CACHE_UNPACKED_SPACE, TEXT_CACHE_CHUNK_SIZE ) // persistent text node data storage
 , _elemStorage(this, 'e', ELEM_CACHE_UNPACKED_SPACE, ELEM_CACHE_CHUNK_SIZE ) // persistent element data storage
@@ -1199,6 +1444,7 @@ tinyNodeCollection::tinyNodeCollection( tinyNodeCollection & v )
 , _cacheFile(NULL)
 , _mapped(false)
 , _maperror(false)
+, _mapSavingStage(0)
 #endif
 , _textStorage(this, 't', TEXT_CACHE_UNPACKED_SPACE, TEXT_CACHE_CHUNK_SIZE ) // persistent text node data storage
 , _elemStorage(this, 'e', ELEM_CACHE_UNPACKED_SPACE, ELEM_CACHE_CHUNK_SIZE ) // persistent element data storage
@@ -1250,6 +1496,7 @@ bool tinyNodeCollection::openCacheFile()
     _elemStorage.setCache( f );
     _rectStorage.setCache( f );
     _styleStorage.setCache( f );
+    _blobCache.setCacheFile( f );
     return true;
 }
 
@@ -1295,6 +1542,7 @@ bool tinyNodeCollection::createCacheFile()
     _elemStorage.setCache( f );
     _rectStorage.setCache( f );
     _styleStorage.setCache( f );
+    _blobCache.setCacheFile( f );
     return true;
 }
 
@@ -1614,7 +1862,7 @@ tinyNodeCollection::~tinyNodeCollection()
 
 #if BUILD_LITE!=1
 /// put all objects into persistent storage
-void tinyNodeCollection::persist()
+void tinyNodeCollection::persist( CRTimerUtil & maxTime )
 {
     CRLog::info("lxmlDocBase::persist() invoked - converting all nodes to persistent objects");
     // elements
@@ -1623,20 +1871,32 @@ void tinyNodeCollection::persist()
         if ( part ) {
             int n0 = TNC_PART_LEN * partindex;
             for ( int i=0; i<TNC_PART_LEN && n0+i<=_elemCount; i++ )
-                if ( !part[i].isNull() && !part[i].isPersistent() )
+                if ( !part[i].isNull() && !part[i].isPersistent() ) {
                     part[i].persist();
+                    if (maxTime.expired())
+                        return;
+                }
         }
     }
+    //_cacheFile->flush(false); // intermediate flush
+    if ( maxTime.expired() )
+        return;
     // texts
     for ( int partindex = 0; partindex<=(_textCount>>TNC_PART_SHIFT); partindex++ ) {
         ldomNode * part = _textList[partindex];
         if ( part ) {
             int n0 = TNC_PART_LEN * partindex;
             for ( int i=0; i<TNC_PART_LEN && n0+i<=_textCount; i++ )
-                if ( !part[i].isNull() && !part[i].isPersistent() )
+                if ( !part[i].isNull() && !part[i].isPersistent() ) {
+                    //CRLog::trace("before persist");
                     part[i].persist();
+                    //CRLog::trace("after persist");
+                    if (maxTime.expired())
+                        return;
+                }
         }
     }
+    //_cacheFile->flush(false); // intermediate flush
 }
 #endif
 
@@ -1664,15 +1924,26 @@ void tinyNodeCollection::persist()
 
 
 /// saves all unsaved chunks to cache file
-bool ldomDataStorageManager::save()
+bool ldomDataStorageManager::save( CRTimerUtil & maxTime )
 {
     bool res = true;
 #if BUILD_LITE!=1
     if ( !_cache )
         return true;
-    for ( int i=0; i<_chunks.length(); i++ )
-        if ( !_chunks[i]->save() )
+    for ( int i=0; i<_chunks.length(); i++ ) {
+        if ( !_chunks[i]->save() ) {
             res = false;
+            break;
+        }
+        //CRLog::trace("time elapsed: %d", (int)maxTime.elapsed());
+        if (maxTime.expired())
+            return res;
+//        if ( (i&3)==3 &&  maxTime.expired() )
+//            return res;
+    }
+    _cache->flush(false, maxTime); // intermediate flush
+    if ( maxTime.expired() )
+        return res;
     if ( !res )
         return false;
     // save chunk index
@@ -2699,7 +2970,7 @@ bool ldomDocument::saveToStream( LVStreamRef stream, const char *, bool treeLayo
 ldomDocument::~ldomDocument()
 {
 #if BUILD_LITE!=1
-    updateMap();
+    //updateMap();
 #endif
 }
 
@@ -2948,7 +3219,7 @@ int ldomDocument::render( LVRendPageList * pages, LVDocViewCallback * callback, 
         _pagesData.reset();
         pages->serialize( _pagesData );
 
-        saveChanges();
+        //saveChanges();
 
         //persist();
         dumpStatistics();
@@ -4914,7 +5185,7 @@ void ldomXPointerEx::initIndex()
 /// move to sibling #
 bool ldomXPointerEx::sibling( int index )
 {
-    if ( _level < 1 )
+    if ( _level <= 1 )
         return false;
     ldomNode * p = getNode()->getParentNode();
     if ( !p || index < 0 || index >= (int)p->getChildCount() )
@@ -4934,17 +5205,19 @@ bool ldomXPointerEx::nextSibling()
 /// move to previous sibling
 bool ldomXPointerEx::prevSibling()
 {
+    if ( _level <= 1 )
+        return false;
     return sibling( _indexes[_level-1] - 1 );
 }
 
 /// move to next sibling element
 bool ldomXPointerEx::nextSiblingElement()
 {
-    if ( _level < 1 )
+    if ( _level <= 1 )
         return false;
     ldomNode * node = getNode();
     ldomNode * p = node->getParentNode();
-    for ( int i=_indexes[_level-1] + 1; i<(int)node->getChildCount(); i++ ) {
+    for ( int i=_indexes[_level-1] + 1; i<(int)p->getChildCount(); i++ ) {
         if ( p->getChildNode( i )->isElement() )
             return sibling( i );
     }
@@ -4954,7 +5227,7 @@ bool ldomXPointerEx::nextSiblingElement()
 /// move to previous sibling element
 bool ldomXPointerEx::prevSiblingElement()
 {
-    if ( _level < 1 )
+    if ( _level <= 1 )
         return false;
     ldomNode * node = getNode();
     ldomNode * p = node->getParentNode();
@@ -5283,7 +5556,7 @@ static bool findTextRev( const lString16 & str, int & pos, const lString16 & pat
 }
 
 /// searches for specified text inside range
-bool ldomXRange::findText( lString16 pattern, bool caseInsensitive, bool reverse, LVArray<ldomWord> & words, int maxCount, int maxHeight )
+bool ldomXRange::findText( lString16 pattern, bool caseInsensitive, bool reverse, LVArray<ldomWord> & words, int maxCount, int maxHeight, bool checkMaxFromStart )
 {
     if ( caseInsensitive )
         pattern.lowercase();
@@ -5333,13 +5606,18 @@ bool ldomXRange::findText( lString16 pattern, bool caseInsensitive, bool reverse
         if ( !_start.isText() )
             _start.nextVisibleText();
         int firstFoundTextY = -1;
+        if (checkMaxFromStart) {
+			ldomXPointer p( _start.getNode(), _start.getOffset() );
+			firstFoundTextY = p.toPoint().y;
+		}
         while ( !isNull() ) {
             int offs = _start.getOffset();
 
             if ( firstFoundTextY!=-1 && maxHeight>0 ) {
                 ldomXPointer p( _start.getNode(), offs );
                 int currentTextY = p.toPoint().y;
-                if ( currentTextY>firstFoundTextY+maxHeight )
+                if ( (checkMaxFromStart && currentTextY>=firstFoundTextY+maxHeight) ||
+					currentTextY>firstFoundTextY+maxHeight )
                     return words.length()>0;
             }
 
@@ -5350,7 +5628,12 @@ bool ldomXRange::findText( lString16 pattern, bool caseInsensitive, bool reverse
             while ( ::findText( txt, offs, pattern ) ) {
                 if ( !words.length() && maxHeight>0 ) {
                     ldomXPointer p( _start.getNode(), offs );
-                    firstFoundTextY = p.toPoint().y;
+                    int currentTextY = p.toPoint().y;
+                    if (checkMaxFromStart) {
+						if ( currentTextY>=firstFoundTextY+maxHeight )
+							return words.length()>0;
+					} else
+						firstFoundTextY = currentTextY;
                 }
                 words.add( ldomWord(_start.getNode(), offs, offs + pattern.length() ) );
                 offs++;
@@ -5518,10 +5801,10 @@ ldomMarkedRangeList::ldomMarkedRangeList( const ldomMarkedRangeList * list, lvRe
 {
     if ( !list || list->empty() )
         return;
-    if ( list->get(0)->start.y>rc.bottom )
-        return;
-    if ( list->get( list->length()-1 )->end.y < rc.top )
-        return;
+//    if ( list->get(0)->start.y>rc.bottom )
+//        return;
+//    if ( list->get( list->length()-1 )->end.y < rc.top )
+//        return;
     for ( int i=0; i<list->length(); i++ ) {
         ldomMarkedRange * src = list->get(i);
         if ( src->start.y>=rc.bottom || src->end.y<rc.top )
@@ -5590,8 +5873,11 @@ bool ldomXPointerEx::ensureElement()
     ldomNode * node = getNode();
     if ( !node )
         return false;
-    if ( node->isText() && !parent() )
-        return false;
+    if ( node->isText()) {
+        if (!parent())
+            return false;
+        node = getNode();
+    }
     if ( !node || !node->isElement() )
         return false;
     return true;
@@ -7529,105 +7815,200 @@ bool ldomDocument::loadCacheFileContent(CacheLoadingCallback * formatCallback)
 
 static const char * styles_magic = "CRSTYLES";
 
+#define CHECK_EXPIRATION(s) \
+    if ( maxTime.expired() ) { CRLog::info("timer expired while " s); return CR_TIMEOUT; }
+
+/// saves changes to cache file, limited by time interval (can be called again to continue after TIMEOUT)
+ContinuousOperationResult ldomDocument::saveChanges( CRTimerUtil & maxTime )
+{
+    if ( !_cacheFile )
+        return CR_DONE;
+
+    if (maxTime.infinite()) {
+        _mapSavingStage = 0; // all stages from the beginning
+        _cacheFile->setAutoSyncSize(0);
+    } else {
+        //CRLog::trace("setting autosync");
+        _cacheFile->setAutoSyncSize(STREAM_AUTO_SYNC_SIZE);
+        //CRLog::trace("setting autosync - done");
+    }
+
+    CRLog::trace("ldomDocument::saveChanges(timeout=%d stage=%d)", maxTime.interval(), _mapSavingStage);
+
+    switch (_mapSavingStage) {
+    default:
+    case 0:
+
+        persist( maxTime );
+        CHECK_EXPIRATION("persisting of node data")
+
+        // fall through
+    case 1:
+        _mapSavingStage = 1;
+        CRLog::trace("ldomDocument::saveChanges() - element storage");
+
+        if ( !_elemStorage.save(maxTime) ) {
+            CRLog::error("Error while saving element data");
+            return CR_ERROR;
+        }
+        CHECK_EXPIRATION("saving element storate")
+        // fall through
+    case 2:
+        _mapSavingStage = 2;
+        CRLog::trace("ldomDocument::saveChanges() - text storage");
+        if ( !_textStorage.save(maxTime) ) {
+            CRLog::error("Error while saving text data");
+            return CR_ERROR;
+        }
+        CHECK_EXPIRATION("saving text storate")
+        // fall through
+    case 3:
+        _mapSavingStage = 3;
+        CRLog::trace("ldomDocument::saveChanges() - rect storage");
+
+        if ( !_rectStorage.save(maxTime) ) {
+            CRLog::error("Error while saving rect data");
+            return CR_ERROR;
+        }
+        CHECK_EXPIRATION("saving rect storate")
+        // fall through
+    case 41:
+        _mapSavingStage = 41;
+        CRLog::trace("ldomDocument::saveChanges() - blob storage data");
+
+        if ( _blobCache.saveToCache(maxTime) == CR_ERROR ) {
+            CRLog::error("Error while saving blob storage data");
+            return CR_ERROR;
+        }
+        _cacheFile->flush(false, maxTime); // intermediate flush
+        CHECK_EXPIRATION("saving blob storage data")
+        // fall through
+    case 4:
+        _mapSavingStage = 4;
+        CRLog::trace("ldomDocument::saveChanges() - node style storage");
+
+        if ( !_styleStorage.save(maxTime) ) {
+            CRLog::error("Error while saving node style data");
+            return CR_ERROR;
+        }
+        _cacheFile->flush(false, maxTime); // intermediate flush
+        CHECK_EXPIRATION("saving node style storage")
+        // fall through
+    case 5:
+        _mapSavingStage = 5;
+        CRLog::trace("ldomDocument::saveChanges() - misc data");
+        {
+            SerialBuf propsbuf(4096);
+            getProps()->serialize( propsbuf );
+            if ( !_cacheFile->write( CBT_PROP_DATA, propsbuf, COMPRESS_MISC_DATA ) ) {
+                CRLog::error("Error while saving props data");
+                return CR_ERROR;
+            }
+        }
+        _cacheFile->flush(false, maxTime); // intermediate flush
+        CHECK_EXPIRATION("saving props data")
+        // fall through
+    case 6:
+        _mapSavingStage = 6;
+        {
+            SerialBuf idbuf(4096);
+            serializeMaps( idbuf );
+            if ( !_cacheFile->write( CBT_MAPS_DATA, idbuf, COMPRESS_MISC_DATA ) ) {
+                CRLog::error("Error while saving Id data");
+                return CR_ERROR;
+            }
+        }
+        _cacheFile->flush(false, maxTime); // intermediate flush
+        CHECK_EXPIRATION("saving ID data")
+        // fall through
+    case 7:
+        _mapSavingStage = 7;
+        if ( _pagesData.pos() ) {
+            CRLog::trace("ldomDocument::saveChanges() - page data (%d bytes)", _pagesData.pos());
+            if ( !_cacheFile->write( CBT_PAGE_DATA, _pagesData, COMPRESS_PAGES_DATA  ) ) {
+                CRLog::error("Error while saving pages data");
+                return CR_ERROR;
+            }
+        } else {
+            CRLog::trace("ldomDocument::saveChanges() - no page data");
+        }
+        _cacheFile->flush(false, maxTime); // intermediate flush
+        CHECK_EXPIRATION("saving page data")
+        // fall through
+    case 8:
+        _mapSavingStage = 8;
+
+        CRLog::trace("ldomDocument::saveChanges() - node data");
+        if ( !saveNodeData() ) {
+            CRLog::error("Error while node instance data");
+            return CR_ERROR;
+        }
+        _cacheFile->flush(false, maxTime); // intermediate flush
+        CHECK_EXPIRATION("saving node data")
+        // fall through
+    case 9:
+        _mapSavingStage = 9;
+        CRLog::trace("ldomDocument::saveChanges() - render info");
+        {
+            SerialBuf hdrbuf(0,true);
+            if ( !_hdr.serialize(hdrbuf) ) {
+                CRLog::error("Header data serialization is failed");
+                return CR_ERROR;
+            } else if ( !_cacheFile->write( CBT_REND_PARAMS, hdrbuf, false ) ) {
+                CRLog::error("Error while writing header data");
+                return CR_ERROR;
+            }
+        }
+        CRLog::info("Saving render properties: styleHash=%x, stylesheetHash=%x, docflags=%x, width=%x, height=%x",
+                    _hdr.render_style_hash, _hdr.stylesheet_hash, _hdr.render_docflags, _hdr.render_dx, _hdr.render_dy);
+
+
+        CRLog::trace("ldomDocument::saveChanges() - TOC");
+        {
+            SerialBuf tocbuf(0,true);
+            if ( !m_toc.serialize(tocbuf) ) {
+                CRLog::error("TOC data serialization is failed");
+                return CR_ERROR;
+            } else if ( !_cacheFile->write( CBT_TOC_DATA, tocbuf, COMPRESS_TOC_DATA ) ) {
+                CRLog::error("Error while writing TOC data");
+                return CR_ERROR;
+            }
+        }
+        _cacheFile->flush(false, maxTime); // intermediate flush
+        CHECK_EXPIRATION("saving TOC data")
+        // fall through
+    case 10:
+        _mapSavingStage = 10;
+
+        if ( !saveStylesData() ) {
+            CRLog::error("Error while writing style data");
+            return CR_ERROR;
+        }
+        CRLog::trace("ldomDocument::saveChanges() - flush");
+        {
+            CRTimerUtil infinite;
+            if ( !_cacheFile->flush(true, infinite) ) {
+                CRLog::error("Error while updating index of cache file");
+                return CR_ERROR;
+            }
+        }
+        // fall through
+    case 11:
+        _mapSavingStage = 11;
+    }
+    CRLog::trace("ldomDocument::saveChanges() - done");
+    return CR_DONE;
+}
+
 /// save changes to cache file, @see loadCacheFileContent()
 bool ldomDocument::saveChanges()
 {
-    bool res = true;
     if ( !_cacheFile )
         return true;
-    CRLog::trace("ldomDocument::saveChanges()");
-    persist();
-    CRLog::trace("ldomDocument::saveChanges() - element storage");
-    if ( !_elemStorage.save() ) {
-        CRLog::error("Error while saving element data");
-        res = false;
-    }
-    CRLog::trace("ldomDocument::saveChanges() - text storage");
-    if ( !_textStorage.save() ) {
-        CRLog::error("Error while saving text data");
-        res = false;
-    }
-    CRLog::trace("ldomDocument::saveChanges() - rect storage");
-    if ( !_rectStorage.save() ) {
-        CRLog::error("Error while saving rect data");
-        res = false;
-    }
-    CRLog::trace("ldomDocument::saveChanges() - node style storage");
-    if ( !_styleStorage.save() ) {
-        CRLog::error("Error while saving node style data");
-        res = false;
-    }
-
-
-    CRLog::trace("ldomDocument::saveChanges() - misc data");
-    SerialBuf propsbuf(4096);
-    getProps()->serialize( propsbuf );
-    if ( !_cacheFile->write( CBT_PROP_DATA, propsbuf, COMPRESS_MISC_DATA ) ) {
-        CRLog::error("Error while saving props data");
-        res = false;
-    }
-
-    SerialBuf idbuf(4096);
-    serializeMaps( idbuf );
-    if ( !_cacheFile->write( CBT_MAPS_DATA, idbuf, COMPRESS_MISC_DATA ) ) {
-        CRLog::error("Error while saving Id data");
-        res = false;
-    }
-
-    if ( _pagesData.pos() ) {
-        CRLog::trace("ldomDocument::saveChanges() - page data (%d bytes)", _pagesData.pos());
-        if ( !_cacheFile->write( CBT_PAGE_DATA, _pagesData, COMPRESS_PAGES_DATA  ) ) {
-            CRLog::error("Error while saving pages data");
-            res = false;
-        }
-    } else {
-        CRLog::trace("ldomDocument::saveChanges() - no page data");
-    }
-
-    CRLog::trace("ldomDocument::saveChanges() - node data");
-    if ( !saveNodeData() ) {
-        CRLog::error("Error while node instance data");
-        res = false;
-    }
-
-    CRLog::trace("ldomDocument::saveChanges() - render info");
-    SerialBuf hdrbuf(0,true);
-    if ( !_hdr.serialize(hdrbuf) ) {
-        CRLog::error("Header data serialization is failed");
-        res = false;
-    } else if ( !_cacheFile->write( CBT_REND_PARAMS, hdrbuf, false ) ) {
-        CRLog::error("Error while writing header data");
-        res = false;
-    }
-    CRLog::info("Saving render properties: styleHash=%x, stylesheetHash=%x, docflags=%x, width=%x, height=%x",
-                _hdr.render_style_hash, _hdr.stylesheet_hash, _hdr.render_docflags, _hdr.render_dx, _hdr.render_dy);
-
-
-    CRLog::trace("ldomDocument::saveChanges() - TOC");
-    SerialBuf tocbuf(0,true);
-    if ( !m_toc.serialize(tocbuf) ) {
-        CRLog::error("TOC data serialization is failed");
-        res = false;
-    } else if ( !_cacheFile->write( CBT_TOC_DATA, tocbuf, COMPRESS_TOC_DATA ) ) {
-        CRLog::error("Error while writing TOC data");
-        res = false;
-    }
-
-    if ( !saveStylesData() ) {
-            CRLog::error("Error while writing style data");
-            res = false;
-    }
-
-    if ( res ) {
-        CRLog::trace("ldomDocument::saveChanges() - flush");
-        if ( !_cacheFile->flush(true) ) {
-            CRLog::error("Error while updating index of cache file");
-            res = false;
-        }
-    }
-
-    CRLog::trace("ldomDocument::saveChanges() - done %s", (res?"successfully":"with error"));
-    return res;
+    CRLog::debug("ldomDocument::saveChanges() - infinite");
+    CRTimerUtil timerNoLimit;
+    ContinuousOperationResult res = saveChanges(timerNoLimit);
+    return res!=CR_ERROR;
 }
 
 bool tinyNodeCollection::saveStylesData()
@@ -7864,48 +8245,52 @@ bool tinyNodeCollection::updateLoadedStyles( bool enabled )
     return res;
 }
 
-bool ldomDocument::swapToCache( lUInt32 reservedSize )
+/// swaps to cache file or saves changes, limited by time interval
+ContinuousOperationResult ldomDocument::swapToCache( CRTimerUtil & maxTime )
 {
     if ( _maperror )
-        return false;
-    if ( _mapped ) {
-        return true;
+        return CR_ERROR;
+    if ( !_mapped ) {
+        if ( !createCacheFile() ) {
+            CRLog::error("ldomDocument::swapToCache: failed: cannot create cache file");
+            _maperror = true;
+            return CR_ERROR;
+        }
     }
-    if ( !createCacheFile() ) {
-        CRLog::error("ldomDocument::swapToCache: failed: cannot create cache file");
-        _maperror = true;
-        return false;
+    _mapped = true;
+    if (!maxTime.infinite()) {
+        CRLog::info("Cache file is created, but document saving is postponed");
+        return CR_TIMEOUT;
     }
-
-    if ( !saveChanges() )
+    ContinuousOperationResult res = saveChanges(maxTime);
+    if ( res==CR_ERROR )
     {
         CRLog::error("Error while saving changes to cache file");
         _maperror = true;
-        return false;
+        return CR_ERROR;
     }
-
-    _mapped = true;
-
     CRLog::info("Successfully saved document to cache file: %dK", _cacheFile->getSize()/1024 );
-    return true;
+    return res;
 }
 
 /// saves recent changes to mapped file
-bool ldomDocument::updateMap()
+ContinuousOperationResult ldomDocument::updateMap(CRTimerUtil & maxTime)
 {
     if ( !_cacheFile || !_mapped )
-        return false;
+        return CR_DONE;
 
-    if ( !saveChanges() )
+    ContinuousOperationResult res = saveChanges(maxTime);
+    if ( res==CR_ERROR )
     {
         CRLog::error("Error while saving changes to cache file");
-        return false;
+        return CR_ERROR;
     }
 
-    CRLog::info("Cache file updated successfully");
-    dumpStatistics();
-
-    return true;
+    if ( res==CR_DONE ) {
+        CRLog::info("Cache file updated successfully");
+        dumpStatistics();
+    }
+    return res;
 }
 
 #endif
@@ -10080,14 +10465,31 @@ lString16 ldomNode::getObjectImageRefName()
         return lString16();
     lUInt16 hrefId = getDocument()->getAttrNameIndex(L"href");
     lUInt16 srcId = getDocument()->getAttrNameIndex(L"src");
+    lUInt16 recIndexId = getDocument()->getAttrNameIndex(L"recindex");
     lString16 refName = getAttributeValue( getDocument()->getNsNameIndex(L"xlink"),
         hrefId );
+
     if ( refName.empty() )
         refName = getAttributeValue( getDocument()->getNsNameIndex(L"l"), hrefId );
     if ( refName.empty() )
         refName = getAttributeValue( LXML_NS_ANY, hrefId ); //LXML_NS_NONE
     if ( refName.empty() )
         refName = getAttributeValue( LXML_NS_ANY, srcId ); //LXML_NS_NONE
+    if (refName.empty()) {
+        lString16 recindex = getAttributeValue( LXML_NS_ANY, recIndexId );
+        if (!recindex.empty()) {
+            int n;
+            if (recindex.atoi(n)) {
+                refName = lString16(MOBI_IMAGE_NAME_PREFIX) + lString16::itoa(n);
+                //CRLog::debug("get mobi image %s", LCSTR(refName));
+            }
+        }
+//        else {
+//            for (int k=0; k<getAttrCount(); k++) {
+//                CRLog::debug("attr %s=%s", LCSTR(getAttributeName(k)), LCSTR(getAttributeValue(getAttributeName(k).c_str())));
+//            }
+//        }
+    }
     if ( refName.length()<2 )
         return lString16();
     refName = DecodeHTMLUrlString(refName);
@@ -10129,7 +10531,9 @@ LVImageSourceRef ldomNode::getObjectImageSource()
 LVStreamRef ldomDocument::getObjectImageStream( lString16 refName )
 {
     LVStreamRef ref;
-    if ( refName[0]!='#' ) {
+    if ( refName.startsWith(lString16(BLOB_NAME_PREFIX)) ) {
+        return _blobCache.getBlob(refName);
+    } if ( refName[0]!='#' ) {
         if ( !getContainer().isNull() ) {
             lString16 name = refName;
             if ( !getCodeBase().empty() )
@@ -10811,7 +11215,8 @@ void runBasicTinyDomUnitTests()
     }
 
     CRLog::info("* convert to persistent");
-    doc->persist();
+    CRTimerUtil infinite;
+    doc->persist(infinite);
     doc->dumpStatistics();
 
     MYASSERT(el21->getFirstChild()==NULL,"first child - no children");
@@ -10829,7 +11234,8 @@ void runBasicTinyDomUnitTests()
     MYASSERT(el211->getChildCount()==2, "child count, in persistent");
     el211->modify();
     MYASSERT(el211->getChildCount()==2, "child count, in mutable again");
-    doc->persist();
+    CRTimerUtil infinite2;
+    doc->persist(infinite2);
 
     ldomNode * f1 = root->findChildElement(path1);
     MYASSERT(f1->getNodeId()==el_p, "find 1");

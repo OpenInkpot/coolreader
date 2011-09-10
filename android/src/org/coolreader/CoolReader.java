@@ -444,9 +444,6 @@ public class CoolReader extends Activity
 			log.e("Cannot find field densityDpi, using default value");
 		}
 		
-		// load settings
-		Properties props = loadSettings();
-		
 		intentReceiver = new BroadcastReceiver() {
 
 			@Override
@@ -475,6 +472,15 @@ public class CoolReader extends Activity
 		lp.memoryType = WindowManager.LayoutParams.MEMORY_TYPE_NORMAL;
 		getWindow().setAttributes(lp);
 		
+		// testing background thread
+    	mBackgroundThread = BackgroundThread.instance();
+		mFrame = new FrameLayout(this);
+		mEngine = new Engine(this, mBackgroundThread);
+		mBackgroundThread.setGUI(mFrame);
+		requestWindowFeature(Window.FEATURE_NO_TITLE);
+
+		// load settings
+		Properties props = loadSettings();
 		
 		setFullscreen( props.getBool(ReaderView.PROP_APP_FULLSCREEN, false) );
 		int orientation = props.getInt(ReaderView.PROP_APP_SCREEN_ORIENTATION, 4);
@@ -485,13 +491,6 @@ public class CoolReader extends Activity
 		if ( backlight<-1 || backlight>100 )
 			backlight = -1;
 		setScreenBacklightLevel(backlight);
-		
-		// testing background thread
-    	mBackgroundThread = BackgroundThread.instance();
-		mFrame = new FrameLayout(this);
-		mEngine = new Engine(this, mBackgroundThread);
-		mBackgroundThread.setGUI(mFrame);
-		requestWindowFeature(Window.FEATURE_NO_TITLE);
 		
         mEngine.showProgress( 0, R.string.progress_starting_cool_reader );
 
@@ -507,9 +506,15 @@ public class CoolReader extends Activity
 //		startupView.setBackgroundColor(Color.BLACK);
 		setWakeLockEnabled(props.getBool(ReaderView.PROP_APP_SCREEN_BACKLIGHT_LOCK, false));
 
+		// open DB
+		final String SQLITE_DB_NAME = "cr3db.sqlite";
 		File dbdir = getDir("db", Context.MODE_PRIVATE);
 		dbdir.mkdirs();
-		File dbfile = new File(dbdir, "cr3db.sqlite");
+		File dbfile = new File(dbdir, SQLITE_DB_NAME);
+		File externalDir = Engine.getExternalSettingsDir();
+		if ( externalDir!=null ) {
+			dbfile = Engine.checkOrMoveFile(externalDir, dbdir, SQLITE_DB_NAME);
+		}
 		mDB = new CRDB(dbfile);
 		
        	mScanner = new Scanner(this, mDB, mEngine); //, Environment.getExternalStorageDirectory(), "SD"
@@ -758,6 +763,7 @@ public class CoolReader extends Activity
 		log.i("CoolReader.onPause() : saving reader state");
 		mIsStarted = false;
 		mPaused = true;
+		EinkScreen.UpdateMode = -1;
 		releaseBacklightControl();
 		mReaderView.saveCurrentPositionBookmarkSync(true);
 		super.onPause();
@@ -799,6 +805,9 @@ public class CoolReader extends Activity
 		log.i("CoolReader.onResume()");
 		mPaused = false;
 		mIsStarted = true;
+		Properties props = mReaderView.getSettings();
+		setScreenUpdateMode(props.getInt(ReaderView.PROP_APP_SCREEN_UPDATE_MODE, 0)); 
+		
 		backlightControl.onUserActivity();
 		super.onResume();
 	}
@@ -925,6 +934,8 @@ public class CoolReader extends Activity
 	}
 	public void showView( View view, boolean hideProgress )
 	{
+		if ( mBackgroundThread==null )
+			return;
 		if ( hideProgress )
 		mBackgroundThread.postGUI(new Runnable() {
 			public void run() {
@@ -1352,8 +1363,14 @@ public class CoolReader extends Activity
         	propsFile = existingFile;
         else {
 	        File propsDir = getDir("settings", Context.MODE_PRIVATE);
-			propsDir.mkdirs();
-			propsFile = new File( propsDir, "cr3.ini");
+			propsFile = new File( propsDir, SETTINGS_FILE_NAME);
+			File dataDir = Engine.getExternalSettingsDir();
+			if ( dataDir!=null ) {
+				log.d("external settings dir: " + dataDir);
+				propsFile = Engine.checkOrMoveFile(dataDir, propsDir, SETTINGS_FILE_NAME);
+			} else {
+				propsDir.mkdirs();
+			}
         }
         if ( propsFile.exists() && !DEBUG_RESET_OPTIONS ) {
         	try {
@@ -1561,5 +1578,16 @@ public class CoolReader extends Activity
 	public void showAboutDialog() {
 		AboutDialog dlg = new AboutDialog(this);
 		dlg.show();
+	}
+	
+	public void openURL(String url) {
+		try {
+			Intent i = new Intent(Intent.ACTION_VIEW);  
+			i.setData(Uri.parse(url));  
+			startActivity(i);
+		} catch (Exception e) {
+			log.e("Exception " + e + " while trying to open URL " + url);
+			showToast("Cannot open URL " + url);
+		}
 	}
 }

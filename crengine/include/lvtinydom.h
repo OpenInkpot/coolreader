@@ -107,6 +107,13 @@ typedef enum {
 } xpath_step_t;
 xpath_step_t ParseXPathStep( const lChar8 * &path, lString8 & name, int & index );
 
+/// return value for continuous operations
+typedef enum {
+    CR_DONE,    ///< operation is finished successfully
+    CR_TIMEOUT, ///< operation is incomplete - interrupted by timeout
+    CR_ERROR   ///< error while executing operation
+} ContinuousOperationResult;
+
 /// type of image scaling
 typedef enum {
     IMG_NO_SCALE, /// scaling is disabled
@@ -212,6 +219,24 @@ struct ldomNodeStyleInfo
     lUInt16 _styleIndex;
 };
 
+class ldomBlobItem;
+#define BLOB_NAME_PREFIX L"@blob#"
+#define MOBI_IMAGE_NAME_PREFIX L"mobi_image_"
+class ldomBlobCache
+{
+    CacheFile * _cacheFile;
+    LVPtrVector<ldomBlobItem> _list;
+    bool _changed;
+    bool loadIndex();
+    bool saveIndex();
+public:
+    ldomBlobCache();
+    void setCacheFile( CacheFile * cacheFile );
+    ContinuousOperationResult saveToCache(CRTimerUtil & timeout);
+    bool addBlob( const lUInt8 * data, int size, lString16 name );
+    LVStreamRef getBlob( lString16 name );
+};
+
 class ldomDataStorageManager
 {
     friend class ldomTextStorageChunk;
@@ -226,12 +251,11 @@ protected:
     int _chunkSize;
     char _type;       /// type, to show in log
     ldomTextStorageChunk * getChunk( lUInt32 address );
-    /// checks buffer sizes, compacts most unused chunks
 public:
     /// type
     lUInt16 cacheType();
     /// saves all unsaved chunks to cache file
-    bool save();
+    bool save( CRTimerUtil & maxTime );
     /// load chunk index from cache file
     bool load();
     /// sets cache file
@@ -371,6 +395,7 @@ protected:
     CacheFile * _cacheFile;
     bool _mapped;
     bool _maperror;
+    int  _mapSavingStage;
 
     img_scaling_options_t _imgScalingOptions;
 
@@ -390,6 +415,9 @@ protected:
     LVStyleSheet  _stylesheet;
 
     LVHashTable<lUInt16, lUInt16> _fontMap; // style index to font index
+
+    /// checks buffer sizes, compacts most unused chunks
+    ldomBlobCache _blobCache;
 
     /// uniquie id of file format parsing option (usually 0, but 1 for preformatted text files)
     int getPersistenceFlags();
@@ -421,19 +449,28 @@ protected:
 
     tinyNodeCollection( tinyNodeCollection & v );
 
-
 public:
+
+    /// add named BLOB data to document
+    bool addBlob(lString16 name, const lUInt8 * data, int size) { return _blobCache.addBlob(data, size, name); }
+    /// get BLOB by name
+    LVStreamRef getBlob(lString16 name) { return _blobCache.getBlob(name); }
 
     /// called on document loading end
     bool validateDocument();
 
 #if BUILD_LITE!=1
+    /// swaps to cache file or saves changes, limited by time interval (can be called again to continue after TIMEOUT)
+    virtual ContinuousOperationResult swapToCache(CRTimerUtil & maxTime) = 0;
     /// try opening from cache file, find by source file name (w/o path) and crc32
     virtual bool openFromCache( CacheLoadingCallback * formatCallback ) = 0;
-    /// swap to cache file, find by source file name (w/o path) and crc32
-    virtual bool swapToCache( lUInt32 reservedDataSize=0 ) = 0;
+    /// saves recent changes to mapped file, with timeout (can be called again to continue after TIMEOUT)
+    virtual ContinuousOperationResult updateMap(CRTimerUtil & maxTime) = 0;
     /// saves recent changes to mapped file
-    virtual bool updateMap() = 0;
+    virtual bool updateMap() {
+        CRTimerUtil infinite;
+        return updateMap(infinite)!=CR_ERROR;
+    }
 
     bool swapToCacheIfNecessary();
 
@@ -480,7 +517,7 @@ public:
 
 #if BUILD_LITE!=1
     /// put all object into persistent storage
-    virtual void persist();
+    virtual void persist( CRTimerUtil & maxTime );
 #endif
 
 
@@ -1553,7 +1590,7 @@ public:
     ldomNode * getNearestCommonParent();
 
     /// searches for specified text inside range
-    bool findText( lString16 pattern, bool caseInsensitive, bool reverse, LVArray<ldomWord> & words, int maxCount, int maxHeight );
+    bool findText( lString16 pattern, bool caseInsensitive, bool reverse, LVArray<ldomWord> & words, int maxCount, int maxHeight, bool checkMaxFromStart = false );
 };
 
 class ldomMarkedText
@@ -1810,6 +1847,9 @@ class ldomNavigationHistory
                 _links.add( link );
                 _pos = _links.length();
                 return true;
+            } else if (_links[_pos]==link) {
+                _pos++;
+                return true;
             }
             return false;
         }
@@ -1875,6 +1915,8 @@ private:
 
     /// save changes to cache file
     bool saveChanges();
+    /// saves changes to cache file, limited by time interval (can be called again to continue after TIMEOUT)
+    virtual ContinuousOperationResult saveChanges( CRTimerUtil & maxTime );
 #endif
 
 protected:
@@ -1918,10 +1960,15 @@ public:
 #if BUILD_LITE!=1
     /// try opening from cache file, find by source file name (w/o path) and crc32
     virtual bool openFromCache( CacheLoadingCallback * formatCallback );
-    /// swap to cache file, find by source file name (w/o path) and crc32
-    virtual bool swapToCache( lUInt32 reservedDataSize=0 );
     /// saves recent changes to mapped file
-    virtual bool updateMap();
+    virtual ContinuousOperationResult updateMap(CRTimerUtil & maxTime);
+    /// swaps to cache file or saves changes, limited by time interval
+    virtual ContinuousOperationResult swapToCache( CRTimerUtil & maxTime );
+    /// saves recent changes to mapped file
+    virtual bool updateMap() {
+        CRTimerUtil infinite;
+        return updateMap(infinite)!=CR_ERROR;
+    }
 #endif
 
 
@@ -2075,6 +2122,11 @@ public:
     ldomElementWriter * pop( ldomElementWriter * obj, lUInt16 id );
     /// called on text
     virtual void OnText( const lChar16 * text, int len, lUInt32 flags );
+    /// add named BLOB data to document
+    virtual bool OnBlob(lString16 name, const lUInt8 * data, int size) { return _document->addBlob(name, data, size); }
+    /// set document property
+    virtual void OnDocProperty(const char * name, lString8 value) { _document->getProps()->setString(name, value); }
+
     /// constructor
     ldomDocumentWriter(ldomDocument * document, bool headerOnly=false );
     /// destructor
@@ -2191,6 +2243,10 @@ public:
         if ( insideTag )
             parent->OnText( text, len, flags );
     }
+    /// add named BLOB data to document
+    virtual bool OnBlob(lString16 name, const lUInt8 * data, int size) { return parent->OnBlob(name, data, size); }
+    /// set document property
+    virtual void OnDocProperty(const char * name, lString8 value) { parent->OnDocProperty(name, value); }
     /// constructor
     ldomDocumentFragmentWriter( LVXMLParserCallback * parentWriter, lString16 baseTagName, lString16 baseTagReplacementName, lString16 fragmentFilePath )
     : parent(parentWriter), baseTag(baseTagName), baseTagReplacement(baseTagReplacementName),

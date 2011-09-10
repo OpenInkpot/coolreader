@@ -12,6 +12,7 @@
 #include "org_coolreader_crengine_ReaderView.h"
 
 #include "cr3java.h"
+#include "cr3version.h"
 #include "readerview.h"
 #include "crengine.h"
 #include "epubfmt.h"
@@ -384,6 +385,7 @@ JNIEXPORT jboolean JNICALL Java_org_coolreader_crengine_Engine_initInternal
 	CRLog::setLogger( new JNICDRLogger() );
 	CRLog::setLogLevel( CRLog::LL_TRACE );
 	CRLog::info("CREngine log redirected");
+	CRLog::info("CRENGINE version %s %s", CR_ENGINE_VERSION, CR_ENGINE_BUILD_DATE);
 	
 	CRLog::info("initializing hyphenation manager");
 	HyphMan::initDictionaries(lString16()); //don't look for dictionaries
@@ -510,8 +512,9 @@ static JNINativeMethod sReaderViewMethods[] = {
   {"checkLinkInternal", "(III)Ljava/lang/String;", (void*)Java_org_coolreader_crengine_ReaderView_checkLinkInternal},
   {"goLinkInternal", "(Ljava/lang/String;)I", (void*)Java_org_coolreader_crengine_ReaderView_goLinkInternal},
   {"moveSelectionInternal", "(Lorg/coolreader/crengine/Selection;II)Z", (void*)Java_org_coolreader_crengine_ReaderView_moveSelectionInternal},
+  {"swapToCacheInternal", "()I", (void*)JNICALL Java_org_coolreader_crengine_ReaderView_swapToCacheInternal},
 };
- 
+
 /*
  * Register native JNI-callable methods.
  *

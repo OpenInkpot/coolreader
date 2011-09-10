@@ -592,6 +592,18 @@ public class Scanner {
 		}
 	}
 	
+	public static final String[] SD_MOUNT_POINTS = {
+		"/system/media/sdcard",
+		"/media",
+		"/nand",
+		"/PocketBook701",
+		"/mnt/extsd",
+		"/mnt/ext.sd",
+		"/mnt/external1",
+		"/ext.sd",
+		"/sdcard2",
+	};
+	
 	public void initRoots()
 	{
 		mRoot.clear();
@@ -610,6 +622,11 @@ public class Scanner {
 		addRoot( "/PocketBook701", R.string.dir_internal_sd_card, true);
 		// external SD
 		addRoot( "/mnt/extsd", "External SD /mnt/extsd", true);
+		// external SD
+		addRoot( "/mnt/external1", "External SD /mnt/external1", true);
+		// external SD / Galaxy S
+		addRoot( "/mnt/ext.sd", "External SD /mnt/ext.sd", true);
+		addRoot( "/ext.sd", "External SD /ext.sd", true);
 		// external SD card Huawei S7
 		addRoot( "/sdcard2", R.string.dir_sd_card_2, true);
 		//addRoot( "/mnt/localdisk", "/mnt/localdisk", true);

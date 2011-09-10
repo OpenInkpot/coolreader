@@ -2021,7 +2021,7 @@ lString16 lString16::itoa( unsigned int n )
 // constructs string representation of integer
 lString16 lString16::itoa( lUInt64 n )
 {
-    lChar16 buf[16];
+    lChar16 buf[24];
     int i=0;
     if (n==0)
         return lString16("0");
@@ -2385,7 +2385,7 @@ CH_PROP_SIGN, // '\''
 CH_PROP_SIGN, // '*'
 CH_PROP_SIGN, // '+'
 CH_PROP_PUNCT, // ','
-CH_PROP_SIGN, // '-'
+CH_PROP_SIGN|CH_PROP_DASH, // '-'
 CH_PROP_PUNCT, // '.'
 CH_PROP_SIGN, // '/'
 // 0x0030:
@@ -2910,7 +2910,7 @@ void lStr_getCharProps( const lChar16 * str, int sz, lUInt16 * props )
     const lChar16 maxchar = sizeof(char_props) / sizeof( lUInt16 );
     for ( int i=0; i<sz; i++ ) {
         lChar16 ch = str[i];
-        props[i] = (ch<maxchar) ? char_props[ch] : 0;
+        props[i] = (ch<maxchar) ? char_props[ch] : (ch>=0x2012 && ch<=0x2015 ? CH_PROP_DASH|CH_PROP_SIGN : 0);
     }
 }
 
@@ -2999,7 +2999,7 @@ void  lString16::limit( size_type sz )
 lUInt16 lGetCharProps( lChar16 ch )
 {
     const lChar16 maxchar = sizeof(char_props) / sizeof( lUInt16 );
-    return (ch<maxchar) ? char_props[ch] : 0;
+    return (ch<maxchar) ? char_props[ch] : (ch>=0x2012 && ch<=0x2015 ? CH_PROP_DASH|CH_PROP_SIGN : 0);
 }
 
 
