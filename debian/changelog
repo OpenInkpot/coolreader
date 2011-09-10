@@ -1,3 +1,10 @@
+cr3 (3.0.51-8.oi1) zelazny; urgency=low
+
+  * Merge with upstream
+  * Add settings for PRS505
+
+ -- Alexander Kerner <lunohod@openinkpot.org>  Sat, 10 Sep 2011 23:50:22 +0200
+
 cr3 (3.0.46-10.oi2) zelazny; urgency=low
 
   * Fix theme on n516
