@@ -51,3 +51,12 @@ Conflicts: cr3-settings
 Replaces: cr3-settings
 Description: EB600 specific settings
  This package provides EB600 specific settings.
+
+Package: cr3-settings-prs505
+Architecture: all
+Depends: cr3
+Provides: cr3-settings
+Conflicts: cr3-settings
+Replaces: cr3-settings
+Description: PRS505 specific settings
+ This package provides PRS505 specific settings.
