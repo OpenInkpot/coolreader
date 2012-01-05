@@ -3,41 +3,65 @@ package org.coolreader.crengine;
 import org.coolreader.CoolReader;
 import org.coolreader.R;
 
+import android.app.AlertDialog;
 import android.app.Dialog;
 import android.content.DialogInterface;
 import android.graphics.PixelFormat;
 import android.util.Log;
+import android.view.GestureDetector;
+import android.view.GestureDetector.SimpleOnGestureListener;
 import android.view.Gravity;
 import android.view.LayoutInflater;
+import android.view.MotionEvent;
 import android.view.View;
+import android.view.View.OnTouchListener;
 import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowManager;
-import android.widget.Button;
+import android.widget.ImageButton;
+import android.widget.TextView;
 
 public class BaseDialog extends Dialog {
 
 	View layoutView;
 	ViewGroup buttonsLayout;
 	ViewGroup contentsLayout;
-	public static final boolean DARK_THEME = !DeviceInfo.FORCE_LIGHT_THEME;
-	public BaseDialog( CoolReader activity, int positiveButtonText, int negativeButtonText, boolean windowed )
-	{
-		this( activity, positiveButtonText, negativeButtonText, activity.isFullscreen(), activity.isNightMode(), windowed );
+	CoolReader activity;
+	String title;
+	boolean needCancelButton;
+	int positiveButtonImage;
+	int negativeButtonImage;
+	public void setPositiveButtonImage(int id) {
+		positiveButtonImage = id;
 	}
-	public BaseDialog( CoolReader activity, int positiveButtonText, int negativeButtonText, boolean fullscreen, boolean dark, boolean windowed )
+	public void setNegativeButtonImage(int id) {
+		negativeButtonImage = id;
+	}
+	
+	public static final boolean DARK_THEME = !DeviceInfo.FORCE_LIGHT_THEME;
+	public BaseDialog( CoolReader activity )
+	{
+		this( activity, "", false, false );
+	}
+	public BaseDialog( CoolReader activity, String title, boolean showNegativeButton, boolean windowed )
+	{
+		this( activity, title, showNegativeButton, activity.isFullscreen(), activity.isNightMode(), windowed );
+	}
+	public BaseDialog( CoolReader activity, String title, boolean showNegativeButton, boolean fullscreen, boolean dark, boolean windowed )
 	{
 		//super(activity, fullscreen ? R.style.Dialog_Fullscreen : R.style.Dialog_Normal);
 		//super(activity, fullscreen ? R.style.Dialog_Fullscreen : android.R.style.Theme_Dialog); //android.R.style.Theme_Light_NoTitleBar_Fullscreen : android.R.style.Theme_Light
 		super(activity,
-				windowed ? (dark||DARK_THEME ? android.R.style.Theme_Dialog : android.R.style.Theme_Dialog) :
+				windowed ? activity.getCurrentTheme().getDialogThemeId() :
 				(fullscreen
-				? (	dark||DARK_THEME ? R.style.Dialog_Fullscreen_Night : R.style.Dialog_Fullscreen_Day )
-				: (	dark||DARK_THEME ? R.style.Dialog_Normal_Night : R.style.Dialog_Normal_Day )
+				? activity.getCurrentTheme().getFullscreenDialogThemeId()
+				: activity.getCurrentTheme().getDialogThemeId()
 				));
 		setOwnerActivity(activity);
-		this.mPositiveButtonText = positiveButtonText;
-		this.mNegativeButtonText = negativeButtonText;
+		this.activity = activity;
+		this.title = title;
+		this.needCancelButton = showNegativeButton;
+		getWindow().requestFeature(Window.FEATURE_NO_TITLE);
 //		requestWindowFeature(Window.FEATURE_OPTIONS_PANEL);
 		WindowManager.LayoutParams lp = new WindowManager.LayoutParams();
 		lp.alpha = 1.0f;
@@ -84,52 +108,80 @@ public class BaseDialog extends Dialog {
 		dismiss();
 	}
 
-	protected void createButtonsPane( ViewGroup layout )
+	protected void createButtonsPane( ViewGroup parent, ViewGroup layout )
 	{
-		if ( mNegativeButtonText==0 && mPositiveButtonText==0 ) {
-			layout.setVisibility(View.INVISIBLE);
-			return;
-		}
 		//getWindow().getDecorView().getWidth()
-		if ( mPositiveButtonText!=0 ) {
-			Button positiveButton = (Button)layout.findViewById(R.id.base_dlg_btn_positive);
-			if ( positiveButton==null ) {
-				positiveButton = new Button(getContext());
-				layout.addView(positiveButton);
-			}
-			positiveButton.setText(mPositiveButtonText);
+		ImageButton positiveButton = (ImageButton)layout.findViewById(R.id.base_dlg_btn_positive);
+		ImageButton negativeButton = (ImageButton)layout.findViewById(R.id.base_dlg_btn_negative);
+		ImageButton backButton = (ImageButton)layout.findViewById(R.id.base_dlg_btn_back);
+		if (positiveButtonImage != 0) {
+			positiveButton.setImageResource(positiveButtonImage);
+			//backButton.setImageResource(positiveButtonImage);
+		}
+		if (negativeButtonImage != 0) {
+			negativeButton.setImageResource(negativeButtonImage);
+			backButton.setImageResource(negativeButtonImage);
+		}
+		if (needCancelButton) {
+			//layout.removeView(backButton);
+			layout.removeView(negativeButton);
 			positiveButton.setOnClickListener(new View.OnClickListener() {
 				public void onClick(View v) {
 					onPositiveButtonClick();
 				}
 			});
-		}
-		Button negativeButton = (Button)layout.findViewById(R.id.base_dlg_btn_negative);
-		if ( negativeButton==null && mNegativeButtonText!=0 ) {
-			negativeButton = new Button(getContext());
-			layout.addView(negativeButton);
-		}
-		if ( negativeButton!=null ) {
-			if ( mNegativeButtonText!=0 ) {
-				negativeButton.setText(mNegativeButtonText);
-				negativeButton.setOnClickListener(new View.OnClickListener() {
+			//negativeButton.setOnClickListener(new View.OnClickListener() {
+			backButton.setOnClickListener(new View.OnClickListener() {
+				public void onClick(View v) {
+					onNegativeButtonClick();
+				}
+			});
+		} else {
+			layout.removeView(positiveButton);
+			layout.removeView(negativeButton);
+			if (title != null) {
+				backButton.setOnClickListener(new View.OnClickListener() {
 					public void onClick(View v) {
-						onNegativeButtonClick();
+						onPositiveButtonClick();
 					}
 				});
 			} else {
-				negativeButton.setVisibility(View.INVISIBLE);
+				parent.removeView(layout);
+                buttonsLayout = null;
 			}
+		}
+		if (title != null)
+			setTitle(title);
+		if (buttonsLayout != null) {
+			buttonsLayout.setOnTouchListener(new OnTouchListener() {
+				@Override
+				public boolean onTouch(View v, MotionEvent event) {
+					if (event.getAction() == MotionEvent.ACTION_DOWN) {
+						int x = (int)event.getX();
+						int dx = v.getWidth();
+						if (x < dx / 2) {
+							if (needCancelButton)
+								onNegativeButtonClick();
+							else
+								onPositiveButtonClick();
+						} else {
+							onPositiveButtonClick();
+						}
+						return true;
+					}
+					return false;
+				}
+			});
 		}
 	}
 
 	@Override
 	public void setTitle(CharSequence title) {
-		if ( title!=null )
-			super.setTitle(title);
-		else {
-			getWindow().requestFeature(Window.FEATURE_NO_TITLE);
-			//((CoolReader)getOwnerActivity()).applyFullscreen( getWindow() );
+		this.title = String.valueOf(title);
+		if (buttonsLayout != null) {
+	        TextView lbl = (TextView)buttonsLayout.findViewById(R.id.base_dlg_title);
+	        if (lbl != null)
+	        	lbl.setText(title != null ? title : "");
 		}
 	}
 
@@ -137,16 +189,18 @@ public class BaseDialog extends Dialog {
 	{
         LayoutInflater mInflater = LayoutInflater.from(getContext());
         ViewGroup layout = (ViewGroup)mInflater.inflate(R.layout.base_dialog, null);
-        buttonsLayout = (ViewGroup)layout.findViewById(R.id.base_dialog_buttons_view);
-        if ( buttonsLayout!=null ) {
-            if ( mPositiveButtonText!=0 || mNegativeButtonText!=0 ) {
-            	createButtonsPane(buttonsLayout);
+        buttonsLayout = (ViewGroup)layout.findViewById(R.id.base_dlg_button_panel);
+        if (buttonsLayout != null) {
+            if ( needCancelButton || title != null) {
+            	createButtonsPane(layout, buttonsLayout);
             } else {
             	layout.removeView(buttonsLayout);
+                buttonsLayout = null;
             }
         }
         contentsLayout =  (ViewGroup)layout.findViewById(R.id.base_dialog_content_view);
         contentsLayout.addView(view);
+        setTitle(title);
 		return layout;
 	}
 	
@@ -157,8 +211,86 @@ public class BaseDialog extends Dialog {
 	protected void onClose() {
 		// when dialog is closed
 	}
+	
+	/**
+	 * Set View's gesture handlers for LTR and RTL horizontal fling
+	 * @param view
+	 * @param ltrHandler, pass null to call onNegativeButtonClick
+	 * @param rtlHandler, pass null to call onPositiveButtonClick
+	 */
+	public void setFlingHandlers(View view, Runnable ltrHandler, Runnable rtlHandler) {
+		if (ltrHandler == null)
+			ltrHandler = new Runnable() {
+				@Override
+				public void run() {
+					// cancel
+					onNegativeButtonClick();
+				}
+			};
+		if (rtlHandler == null)
+			rtlHandler = new Runnable() {
+				@Override
+				public void run() {
+					// ok
+					onPositiveButtonClick();
+				}
+			};
+		final GestureDetector detector = new GestureDetector(new MyGestureListener(ltrHandler, rtlHandler));
+		view.setOnTouchListener(new OnTouchListener() {
+			@Override
+			public boolean onTouch(View v, MotionEvent event) {
+				return detector.onTouchEvent(event);
+			}
+		});
+	}
 
-	protected int mPositiveButtonText = 0;
-	protected int mNegativeButtonText = 0;
+	private class MyGestureListener extends SimpleOnGestureListener {
+		Runnable ltrHandler;
+		Runnable rtlHandler;
+		
+		public MyGestureListener(Runnable ltrHandler, Runnable rtlHandler) {
+			this.ltrHandler = ltrHandler;
+			this.rtlHandler = rtlHandler;
+		}
+
+		@Override
+		public boolean onFling(MotionEvent e1, MotionEvent e2, float velocityX,
+				float velocityY) {
+			if (e1 == null || e2 == null)
+				return false;
+			int thresholdDistance = activity.getPalmTipPixels() * 2;
+			int thresholdVelocity = activity.getPalmTipPixels();
+			int x1 = (int)e1.getX();
+			int x2 = (int)e2.getX();
+			int y1 = (int)e1.getY();
+			int y2 = (int)e2.getY();
+			int dist = x2 - x1;
+			int adist = dist > 0 ? dist : -dist;
+			int ydist = y2 - y1;
+			int aydist = ydist > 0 ? ydist : -ydist;
+			int vel = (int)velocityX;
+			if (vel<0)
+				vel = -vel;
+			if (vel > thresholdVelocity && adist > thresholdDistance && adist > aydist * 2) {
+				if (dist > 0) {
+					Log.d("cr3", "LTR fling detected");
+					if (ltrHandler != null) {
+						ltrHandler.run();
+						return true;
+					}
+				} else {
+					Log.d("cr3", "RTL fling detected");
+					if (rtlHandler != null) {
+						rtlHandler.run();
+						return true;
+					}
+				}
+			}
+			return false;
+		}
+		
+	}
+	
+	
 	protected View view;
 }

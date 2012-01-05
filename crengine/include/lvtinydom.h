@@ -89,6 +89,8 @@
 #define DOC_PROP_CODE_BASE       "doc.file.code.base"
 #define DOC_PROP_COVER_FILE      "doc.cover.file"
 
+#define DEF_MIN_SPACE_CONDENSING_PERCENT 50
+
 //#if BUILD_LITE!=1
 /// final block cache
 typedef LVRef<LFormattedText> LFormattedTextRef;
@@ -195,6 +197,8 @@ public:
     virtual void OnExternalLink( lString16 url, ldomNode * node ) { }
     /// Called when page images should be invalidated (clearImageCache() called in LVDocView)
     virtual void OnImageCacheClear() { }
+    /// return true if reload will be processed by external code, false to let internal code process it
+    virtual bool OnRequestReload() { return false; }
     /// destructor
     virtual ~LVDocViewCallback() { }
 };
@@ -303,13 +307,13 @@ class ldomTextStorageChunk
 {
     friend class ldomDataStorageManager;
     ldomDataStorageManager * _manager;
+    ldomTextStorageChunk * _nextRecent;
+    ldomTextStorageChunk * _prevRecent;
     lUInt8 * _buf;     /// buffer for uncompressed data
     lUInt32 _bufsize;  /// _buf (uncompressed) area size, bytes
     lUInt32 _bufpos;  /// _buf (uncompressed) data write position (for appending of new data)
     lUInt16 _index;  /// ? index of chunk in storage
     char _type;       /// type, to show in log
-    ldomTextStorageChunk * _nextRecent;
-    ldomTextStorageChunk * _prevRecent;
     bool _saved;
 
     void setunpacked( const lUInt8 * buf, int bufsize );
@@ -398,6 +402,7 @@ protected:
     int  _mapSavingStage;
 
     img_scaling_options_t _imgScalingOptions;
+    int  _minSpaceCondensingPercent;
 
 
     int calcFinalBlocks();
@@ -411,6 +416,8 @@ protected:
 
     CRPropRef _docProps;
     lUInt32 _docFlags; // document flags
+
+    int _styleIndex;
 
     LVStyleSheet  _stylesheet;
 
@@ -450,6 +457,13 @@ protected:
     tinyNodeCollection( tinyNodeCollection & v );
 
 public:
+
+    bool setMinSpaceCondensingPercent(int minSpaceCondensingPercent) {
+        if (minSpaceCondensingPercent == _minSpaceCondensingPercent)
+            return false;
+        _minSpaceCondensingPercent = minSpaceCondensingPercent;
+        return true;
+    }
 
     /// add named BLOB data to document
     bool addBlob(lString16 name, const lUInt8 * data, int size) { return _blobCache.addBlob(data, size, name); }
@@ -1217,7 +1231,7 @@ public:
     /// returns true for NULL pointer
 	bool isNull() const
 	{
-		return _data->isNull();
+        return !this || !_data || _data->isNull();
 	}
     /// returns true if object is pointer
 	bool isPointer() const
@@ -1829,8 +1843,8 @@ class ldomNavigationHistory
         int _pos;
         void clearTail()
         {
-            if ( _links.length()-_pos > 0 )
-                _links.erase(_pos, _links.length()-_pos);
+            if (_links.length() > _pos)
+                _links.erase(_pos, _links.length() - _pos);
         }
     public:
         void clear()

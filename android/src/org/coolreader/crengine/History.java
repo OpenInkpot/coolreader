@@ -33,6 +33,13 @@ public class History {
 		return mBooks.get(0);
 	}
 
+	public BookInfo getPreviousBook()
+	{
+		if ( mBooks.size()<2 )
+			return null;
+		return mBooks.get(1);
+	}
+
 	public BookInfo getOrCreateBookInfo( FileInfo file )
 	{
 		BookInfo res = getBookInfo(file);
@@ -69,6 +76,7 @@ public class History {
 				mDB.deleteBook(fileInfo);
 			else if ( removeRecentAccessFromDB )
 				mDB.deleteRecentPosition(fileInfo);
+			updateRecentDir();
 		}
 	}
 	

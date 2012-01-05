@@ -4,6 +4,7 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.zip.ZipEntry;
 
@@ -17,7 +18,7 @@ import android.util.Log;
 public class Scanner {
 	
 	HashMap<String, FileInfo> mFileList = new HashMap<String, FileInfo>();
-	ArrayList<FileInfo> mFilesForParsing = new ArrayList<FileInfo>();
+//	ArrayList<FileInfo> mFilesForParsing = new ArrayList<FileInfo>();
 	FileInfo mRoot;
 	
 	boolean mHideEmptyDirs = true;
@@ -405,34 +406,34 @@ public class Scanner {
 		FileInfo dir = new FileInfo();
 		dir.isDirectory = true;
 		dir.pathname = FileInfo.OPDS_LIST_TAG;
-		dir.filename = "OPDS Catalogs";
+		dir.filename = coolReader.getString(R.string.mi_book_opds_root);
 		dir.isListed = true;
 		dir.isScanned = true;
 		dir.parent = mRoot;
 		mRoot.addDir(dir);
-		String[] urls = {
-				"http://www.feedbooks.com/catalog/", "Feedbooks",
-				"http://bookserver.archive.org/catalog/", "Internet Archive",
-				"http://m.gutenberg.org/", "Project Gutenberg", 
-				"http://ebooksearch.webfactional.com/catalog.atom", "eBookSearch", 
-				"http://bookserver.revues.org/", "Revues.org", 
-				"http://www.legimi.com/opds/root.atom", "Legimi",
-				"http://www.ebooksgratuits.com/opds/", "Ebooks libres et gratuits",
-				"http://213.5.65.159/opds/", "Flibusta", 
-				"http://lib.ololo.cc/opds/", "lib.ololo.cc",
-		};
-		for ( int i=0; i<urls.length-1; i+=2 ) {
-			String url = urls[i];
-			String title = urls[i+1];
-			FileInfo odps = new FileInfo();
-			odps.isDirectory = true;
-			odps.pathname = FileInfo.OPDS_DIR_PREFIX + url;
-			odps.filename = title;
-			odps.isListed = true;
-			odps.isScanned = true;
-			odps.parent = dir;
-			dir.addDir(odps);
-		}
+		db.loadOPDSCatalogs(dir);
+	}
+	
+	private void addSearchRoot() {
+		FileInfo dir = new FileInfo();
+		dir.isDirectory = true;
+		dir.pathname = FileInfo.SEARCH_SHORTCUT_TAG;
+		dir.filename = coolReader.getString(R.string.mi_book_search);
+		dir.isListed = true;
+		dir.isScanned = true;
+		dir.parent = mRoot;
+		mRoot.addDir(dir);
+	}
+	
+	private void addAuthorsRoot() {
+		FileInfo dir = new FileInfo();
+		dir.isDirectory = true;
+		dir.pathname = FileInfo.AUTHORS_TAG;
+		dir.filename = coolReader.getString(R.string.folder_name_books_by_author);
+		dir.isListed = true;
+		dir.isScanned = true;
+		dir.parent = mRoot;
+		mRoot.addDir(dir);
 	}
 	
 	/**
@@ -602,38 +603,27 @@ public class Scanner {
 		"/mnt/external1",
 		"/ext.sd",
 		"/sdcard2",
-	};
+		"/mnt/sdcard2",
+		};
 	
-	public void initRoots()
+	public void initRoots(Map<String, String> fsRoots)
 	{
 		mRoot.clear();
 		// create recent books dir
 		addRoot( FileInfo.RECENT_DIR_TAG, R.string.dir_recent_books, false);
-		String sdpath = Environment.getExternalStorageDirectory().getAbsolutePath();
-		if ( "/nand".equals(sdpath) && new File("/sdcard").isDirectory() )
-			sdpath = "/sdcard";
-		addRoot( sdpath, R.string.dir_sd_card, true);
-		// internal SD card on Nook
-		addRoot( "/system/media/sdcard", R.string.dir_internal_sd_card, true);
-		// internal memory
-		addRoot( "/media", R.string.dir_internal_memory, true);
-		addRoot( "/nand", R.string.dir_internal_memory, true);
-		// internal SD card on PocketBook 701 IQ
-		addRoot( "/PocketBook701", R.string.dir_internal_sd_card, true);
-		// external SD
-		addRoot( "/mnt/extsd", "External SD /mnt/extsd", true);
-		// external SD
-		addRoot( "/mnt/external1", "External SD /mnt/external1", true);
-		// external SD / Galaxy S
-		addRoot( "/mnt/ext.sd", "External SD /mnt/ext.sd", true);
-		addRoot( "/ext.sd", "External SD /ext.sd", true);
-		// external SD card Huawei S7
-		addRoot( "/sdcard2", R.string.dir_sd_card_2, true);
-		//addRoot( "/mnt/localdisk", "/mnt/localdisk", true);
-		autoAddRoots( "/", SYSTEM_ROOT_PATHS );
-		autoAddRoots( "/mnt", new String[] {} );
-		
+
+		// create system dirs
+		for (Map.Entry<String, String> entry : fsRoots.entrySet())
+			addRoot( entry.getKey(), entry.getValue(), true);
+
+		// create OPDS dir
 		addOPDSRoot();
+		
+		// create search dir
+		addSearchRoot();
+		
+		// create books by author root
+		addAuthorsRoot();
 	}
 	
 	public boolean autoAddRootForFile( File f ) {
@@ -649,8 +639,6 @@ public class Scanner {
 		}
 		return false;
 	}
-	
-	private static final String[] SYSTEM_ROOT_PATHS = {"/system", "/data", "/mnt"};
 	
 //	public boolean scan()
 //	{
@@ -683,11 +671,15 @@ public class Scanner {
 		for ( int i=0; i<mRoot.dirCount(); i++ ) {
 			FileInfo item = mRoot.getDir(i);
 			if ( !item.isSpecialDir() && !item.isArchive ) {
-				FileInfo books = item.findItemByPathName(item.pathname+"/Books");
-				if ( books.exists() )
+				FileInfo books = item.findItemByPathName(item.pathname + "/Books");
+				if (books == null)
+					books = item.findItemByPathName(item.pathname + "/books");
+				if (books != null && books.exists())
 					return books;
 				File dir = new File(item.getPathName());
-				if ( dir.isDirectory() && dir.canWrite() ) {
+				if (dir.isDirectory()) {
+					if (!dir.canWrite())
+						Log.w("cr3", "Directory " + dir + " is readonly");
 					File f = new File( dir, "Books" );
 					if ( f.mkdirs() ) {
 						books = new FileInfo(f);
@@ -725,7 +717,7 @@ public class Scanner {
 		this.coolReader = coolReader;
 		mRoot = new FileInfo();
 		mRoot.path = FileInfo.ROOT_DIR_TAG;	
-		mRoot.filename = "File Manager";	
+		mRoot.filename = "File Manager";
 		mRoot.pathname = FileInfo.ROOT_DIR_TAG;
 		mRoot.isListed = true;
 		mRoot.isScanned = true;

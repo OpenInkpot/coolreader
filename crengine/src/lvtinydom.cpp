@@ -12,7 +12,10 @@
 *******************************************************/
 
 /// change in case of incompatible changes in swap/cache file format to avoid using incompatible swap file
-#define CACHE_FILE_FORMAT_VERSION "3.04.02"
+// increment to force complete reload/reparsing of old file
+#define CACHE_FILE_FORMAT_VERSION "3.04.15"
+/// increment following value to force re-formatting of old book after load
+#define FORMATTING_VERSION_ID 0x0003
 
 #ifndef DOC_DATA_COMPRESSION_LEVEL
 /// data compression level (0=no compression, 1=fast compressions, 3=normal compression)
@@ -28,13 +31,16 @@
 //=====================================================
 
 #ifndef DOC_BUFFER_SIZE
-#define DOC_BUFFER_SIZE 0x400000 // default buffer size
+#define DOC_BUFFER_SIZE 0xA00000 // default buffer size
 #endif
 
 //--------------------------------------------------------
 // cache memory sizes
 //--------------------------------------------------------
+#ifndef ENABLED_BLOCK_WRITE_CACHE
 #define ENABLED_BLOCK_WRITE_CACHE 1
+#endif
+
 #define WRITE_CACHE_TOTAL_SIZE    (10*DOC_BUFFER_SIZE/100)
 
 #define TEXT_CACHE_UNPACKED_SPACE (25*DOC_BUFFER_SIZE/100)
@@ -107,18 +113,18 @@ enum CacheFileBlockType {
     CBT_INDEX = 1,
     CBT_TEXT_DATA,
     CBT_ELEM_DATA,
-    CBT_RECT_DATA,
+    CBT_RECT_DATA, //4
     CBT_ELEM_STYLE_DATA,
     CBT_MAPS_DATA,
-    CBT_PAGE_DATA,
+    CBT_PAGE_DATA, //7
     CBT_PROP_DATA,
     CBT_NODE_INDEX,
     CBT_ELEM_NODE,
     CBT_TEXT_NODE,
-    CBT_REND_PARAMS,
+    CBT_REND_PARAMS, //12
     CBT_TOC_DATA,
     CBT_STYLE_DATA,
-    CBT_BLOB_INDEX,
+    CBT_BLOB_INDEX, //15
     CBT_BLOB_DATA,
 };
 
@@ -266,10 +272,11 @@ static lUInt64 calcHash64( const lUInt8 * s, int len )
 
 lUInt32 calcGlobalSettingsHash()
 {
-    lUInt32 hash = 0;
+    lUInt32 hash = FORMATTING_VERSION_ID;
     if ( fontMan->getKerning() )
         hash += 127365;
     hash = hash * 31 + fontMan->GetFontListHash();
+    hash = hash * 31 + (int)fontMan->GetHintingMode();
     if ( LVRendGetFontEmbolden() )
         hash = hash * 75 + 2384761;
     if ( gFlgFloatingPunctuationEnabled )
@@ -357,7 +364,7 @@ struct CacheFileHeader : public SimpleCacheFileHeader
     // duplicate of one of index records which contains
     bool validate()
     {
-        if ( memcmp( _magic, CACHE_FILE_MAGIC, CACHE_FILE_MAGIC_SIZE ) ) {
+        if (memcmp(_magic, CACHE_FILE_MAGIC, CACHE_FILE_MAGIC_SIZE) != 0) {
             CRLog::error("CacheFileHeader::validate: magic doesn't match");
             return false;
         }
@@ -370,9 +377,9 @@ struct CacheFileHeader : public SimpleCacheFileHeader
     CacheFileHeader( CacheFileItem * indexRec, int fsize, lUInt32 dirtyFlag )
     : SimpleCacheFileHeader(dirtyFlag), _indexBlock(0,0)
     {
-        if ( indexRec )
+        if ( indexRec ) {
             memcpy( &_indexBlock, indexRec, sizeof(CacheFileItem));
-        else
+        } else
             memset( &_indexBlock, 0, sizeof(CacheFileItem));
         _fsize = fsize;
     }
@@ -398,7 +405,7 @@ class CacheFile
     // mark block as free, for later reusing
     void freeBlock( CacheFileItem * block );
     // writes file header
-    bool updateHeader( CacheFileItem * indexItem );
+    bool updateHeader();
     // writes index block
     bool writeIndex();
     // reads index from file
@@ -505,7 +512,6 @@ bool CacheFile::flush( bool clearDirtyFlag, CRTimerUtil & maxTime )
             return false;
         setDirtyFlag(false);
     } else {
-        CRTimerUtil timer;
         _stream->Flush(false, maxTime);
         //CRLog::trace("CacheFile->flush() took %d ms ", (int)timer.elapsed());
     }
@@ -569,11 +575,13 @@ bool CacheFile::readIndex()
     // check CRC
     lUInt64 hash = calcHash64( (lUInt8*)index, sz );
     if ( hdr._indexBlock._dataHash!=hash ) {
-        CRLog::error("CacheFile::readIndex: CRC doesn't match");
+        CRLog::error("CacheFile::readIndex: CRC doesn't match found %08x expected %08x", hash, hdr._indexBlock._dataHash);
         delete[] index;
         return false;
     }
     for ( int i=0; i<count; i++ ) {
+        if (index[i]._dataType == CBT_INDEX)
+            index[i] = hdr._indexBlock;
         if ( !index[i].validate(_size) ) {
             delete[] index;
             return false;
@@ -593,6 +601,7 @@ bool CacheFile::readIndex()
         CRLog::error("CacheFile::readIndex: index block info doesn't match header");
         return false;
     }
+    _dirty = hdr._dirty;
     return true;
 }
 
@@ -601,35 +610,49 @@ bool CacheFile::writeIndex()
 {
     if ( !_indexChanged )
         return true; // no changes: no writes
+
     if ( _index.length()==0 )
-        return updateHeader( 0 );
+        return updateHeader();
+
     // create copy of index in memory
-    bool indexItemFound = findBlock( CBT_INDEX, 0 )!=NULL;
     int count = _index.length();
-    if ( !indexItemFound ) {
-        count++;
-        allocBlock( CBT_INDEX, 0, sizeof(CacheFileItem)*count );
+    CacheFileItem * indexItem = findBlock(CBT_INDEX, 0);
+    if (!indexItem) {
+        int sz = sizeof(CacheFileItem) * (count * 2 + 100);
+        allocBlock(CBT_INDEX, 0, sz);
+        indexItem = findBlock(CBT_INDEX, 0);
+        count = _index.length();
     }
-    CacheFileItem * index = new CacheFileItem[_index.length()];
-    memset( index, 0, sizeof(CacheFileItem)*_index.length());
-    for ( int i=0; i<_index.length(); i++ ) {
+    CacheFileItem * index = new CacheFileItem[count];
+    int sz = count * sizeof(CacheFileItem);
+    memset(index, 0, sz);
+    for ( int i = 0; i < count; i++ ) {
         memcpy( &index[i], _index[i], sizeof(CacheFileItem) );
+        if (index[i]._dataType == CBT_INDEX) {
+            index[i]._dataHash = 0;
+            index[i]._packedHash = 0;
+            index[i]._dataSize = 0;
+        }
     }
-    bool res = write( CBT_INDEX, 0, (const lUInt8*)index, _index.length()*sizeof(CacheFileItem), false );
-    CacheFileItem * indexItem = findBlock( CBT_INDEX, 0 );
+    bool res = write(CBT_INDEX, 0, (const lUInt8*)index, sz, false);
     delete[] index;
+
+    indexItem = findBlock(CBT_INDEX, 0);
     if ( !res || !indexItem ) {
         CRLog::error("CacheFile::writeIndex: error while writing index!!!");
         return false;
     }
-    updateHeader( indexItem );
+
+    updateHeader();
     _indexChanged = false;
     return true;
 }
 
 // writes file header
-bool CacheFile::updateHeader( CacheFileItem * indexItem )
+bool CacheFile::updateHeader()
 {
+    CacheFileItem * indexItem = NULL;
+    indexItem = findBlock(CBT_INDEX, 0);
     CacheFileHeader hdr(indexItem, _size, _dirty?1:0);
     _stream->SetPos(0);
     lvsize_t bytesWritten = 0;
@@ -818,7 +841,7 @@ bool CacheFile::read( lUInt16 type, lUInt16 dataIndex, lUInt8 * &buf, int &size 
 
     // check CRC
     lUInt64 hash = calcHash64( buf, size );
-    if ( hash!=block->_dataHash ) {
+    if (hash != block->_dataHash) {
         CRLog::error("CacheFile::read: CRC doesn't match for block %d:%d of size %d", type, dataIndex, (int)size);
         free(buf);
         buf = NULL;
@@ -832,13 +855,23 @@ bool CacheFile::read( lUInt16 type, lUInt16 dataIndex, lUInt8 * &buf, int &size 
 // writes block to file
 bool CacheFile::write( lUInt16 type, lUInt16 dataIndex, const lUInt8 * buf, int size, bool compress )
 {
-    setDirtyFlag(true);
     // check whether data is changed
     lUInt64 newhash = calcHash64( buf, size );
     CacheFileItem * existingblock = findBlock( type, dataIndex );
-    if ( existingblock && (int)existingblock->_uncompressedSize==size && existingblock->_dataHash==newhash ) {
-        return true;
+
+    if (existingblock) {
+        bool sameSize = ((int)existingblock->_uncompressedSize==size) || (existingblock->_uncompressedSize==0 && (int)existingblock->_dataSize==size);
+        if (sameSize && existingblock->_dataHash == newhash ) {
+            return true;
+        }
     }
+
+#if 1
+    if (existingblock)
+        CRLog::trace("*    oldsz=%d oldhash=%08x", (int)existingblock->_uncompressedSize, (int)existingblock->_dataHash);
+    CRLog::trace("* wr block t=%d[%d] sz=%d hash=%08x", type, dataIndex, size, newhash);
+#endif
+    setDirtyFlag(true);
 
     lUInt32 uncompressedSize = 0;
     lUInt64 newpackedhash = newhash;
@@ -886,11 +919,19 @@ bool CacheFile::write( lUInt16 type, lUInt16 dataIndex, const lUInt8 * buf, int 
 #if CACHE_FILE_WRITE_BLOCK_PADDING==1
     int paddingSize = block->_blockSize - size; //roundSector( size ) - size
     if ( paddingSize ) {
-        if ( block->_blockFilePos+block->_dataSize >= (int)_stream->GetSize() - _sectorSize ) {
+        if ((int)block->_blockFilePos + (int)block->_dataSize >= (int)_stream->GetSize() - _sectorSize) {
             LASSERT(size + paddingSize == block->_blockSize );
+//            if (paddingSize > 16384) {
+//                CRLog::error("paddingSize > 16384");
+//            }
+//            LASSERT(paddingSize <= 16384);
             lUInt8 tmp[16384];//paddingSize];
-            memset(tmp, 0xFF, paddingSize );
-            _stream->Write(tmp, paddingSize, &bytesWritten );
+            memset(tmp, 0xFF, paddingSize < 16384 ? paddingSize : 16384);
+            do {
+                int blkSize = paddingSize < 16384 ? paddingSize : 16384;
+                _stream->Write(tmp, blkSize, &bytesWritten );
+                paddingSize -= blkSize;
+            } while (paddingSize > 0);
         }
     }
 #endif
@@ -992,7 +1033,7 @@ bool CacheFile::create( LVStreamRef stream )
         _stream.Clear();
         return false;
     }
-    if ( !updateHeader( NULL ) ) {
+    if (!updateHeader()) {
         _stream.Clear();
         return false;
     }
@@ -1048,7 +1089,7 @@ ldomBlobCache::ldomBlobCache() : _cacheFile(NULL), _changed(false)
 
 bool ldomBlobCache::loadIndex()
 {
-    bool res = true;
+    bool res;
     SerialBuf buf(0,true);
     res = _cacheFile->read(CBT_BLOB_INDEX, buf);
     if (!res) {
@@ -1076,7 +1117,7 @@ bool ldomBlobCache::loadIndex()
 
 bool ldomBlobCache::saveIndex()
 {
-    bool res = true;
+    bool res;
     SerialBuf buf(0,true);
     buf.putMagic(BLOB_INDEX_MAGIC);
     lUInt32 len = _list.length();
@@ -1416,6 +1457,7 @@ tinyNodeCollection::tinyNodeCollection()
 , _mapped(false)
 , _maperror(false)
 , _mapSavingStage(0)
+, _minSpaceCondensingPercent(DEF_MIN_SPACE_CONDENSING_PERCENT)
 #endif
 , _textStorage(this, 't', TEXT_CACHE_UNPACKED_SPACE, TEXT_CACHE_CHUNK_SIZE ) // persistent text node data storage
 , _elemStorage(this, 'e', ELEM_CACHE_UNPACKED_SPACE, ELEM_CACHE_CHUNK_SIZE ) // persistent element data storage
@@ -1445,6 +1487,7 @@ tinyNodeCollection::tinyNodeCollection( tinyNodeCollection & v )
 , _mapped(false)
 , _maperror(false)
 , _mapSavingStage(0)
+, _minSpaceCondensingPercent(DEF_MIN_SPACE_CONDENSING_PERCENT)
 #endif
 , _textStorage(this, 't', TEXT_CACHE_UNPACKED_SPACE, TEXT_CACHE_CHUNK_SIZE ) // persistent text node data storage
 , _elemStorage(this, 'e', ELEM_CACHE_UNPACKED_SPACE, ELEM_CACHE_CHUNK_SIZE ) // persistent element data storage
@@ -1941,7 +1984,8 @@ bool ldomDataStorageManager::save( CRTimerUtil & maxTime )
 //        if ( (i&3)==3 &&  maxTime.expired() )
 //            return res;
     }
-    _cache->flush(false, maxTime); // intermediate flush
+    if (!maxTime.infinite())
+        _cache->flush(false, maxTime); // intermediate flush
     if ( maxTime.expired() )
         return res;
     if ( !res )
@@ -2363,8 +2407,8 @@ void ldomTextStorageChunk::setRaw( int offset, int size, const lUInt8 * buf )
     if ( !_buf || offset+size>(int)_bufpos || offset+size>(int)_bufsize )
         crFatalError(123, "ldomTextStorageChunk: Invalid raw data buffer position");
 #endif
-    if ( memcmp( _buf+offset, buf, size ) ) {
-        memcpy( _buf+offset, buf, size );
+    if (memcmp(_buf+offset, buf, size) != 0) {
+        memcpy(_buf+offset, buf, size);
         modified();
     }
 }
@@ -2800,6 +2844,7 @@ LFormattedText * lxmlDocBase::createFormattedText()
 {
     LFormattedText * p = new LFormattedText();
     p->setImageScalingOptions(&_imgScalingOptions);
+    p->setMinSpaceCondensingPercent(_minSpaceCondensingPercent);
     return p;
 }
 
@@ -2970,7 +3015,7 @@ bool ldomDocument::saveToStream( LVStreamRef stream, const char *, bool treeLayo
 ldomDocument::~ldomDocument()
 {
 #if BUILD_LITE!=1
-    //updateMap();
+    updateMap();
 #endif
 }
 
@@ -3218,6 +3263,10 @@ int ldomDocument::render( LVRendPageList * pages, LVDocViewCallback * callback, 
         updateRenderContext();
         _pagesData.reset();
         pages->serialize( _pagesData );
+
+        if ( callback ) {
+            callback->OnFormatEnd();
+        }
 
         //saveChanges();
 
@@ -3956,6 +4005,9 @@ bool ldomNode::applyNodeStylesheet()
 #ifndef DISABLE_STYLESHEET_REL
     if ( getNodeId()!=el_DocFragment || !hasAttribute(attr_StyleSheet) )
         return false;
+    if (!getDocument()->getDocFlag(DOC_FLAG_ENABLE_INTERNAL_STYLES))
+        return false; // internal styles are disabled
+
     lString16 v = getAttributeValue(attr_StyleSheet);
     if ( v.empty() )
         return false;
@@ -4297,15 +4349,15 @@ private:
                             bytesRead += 2;
                         }
                         // stop!!!
-                        m_text_pos--;
+                        //m_text_pos--;
+                        m_iteration = 0;
                         flgEof = true;
                         break;
                     }
                     else
                     {
                         int k = base64_decode_table[ch];
-                        if ( !(k & 0x80) )
-                        {
+                        if ( !(k & 0x80) ) {
                             // next base-64 digit
                             m_value = (m_value << 6) | (k);
                             m_iteration++;
@@ -4319,6 +4371,8 @@ private:
                                 m_value = 0;
                                 bytesRead+=3;
                             }
+                        } else {
+                            //m_text_pos++;
                         }
                     }
                 }
@@ -4709,8 +4763,13 @@ ldomXPointer ldomDocument::createXPointer( lvPoint pt, int direction )
                     continue;
                 if ( src->flags & LTEXT_SRC_IS_OBJECT ) {
                     // object (image)
+#if 1
+                    // return image object itself
+                    return ldomXPointer(node, 0);
+#else
                     return ldomXPointer( node->getParentNode(),
                         node->getNodeIndex() + (( x < word->x + word->width/2 ) ? 0 : 1) );
+#endif
                 }
                 LVFont * font = (LVFont *) src->t.font;
                 lUInt16 w[512];
@@ -6301,8 +6360,8 @@ bool ldomXPointerEx::isVisibleWordEnd()
     lString16 text = node->getText();
     int textLen = text.length();
     int i = _data->getOffset();
-    lChar16 currCh = i<textLen ? text[i] : 0;
-    lChar16 nextCh = i<textLen-1 ? text[i+1] : 0;
+    lChar16 currCh = i>0 ? text[i-1] : 0;
+    lChar16 nextCh = i<textLen ? text[i] : 0;
     if ( canWrapWordAfter(currCh) || !IsUnicodeSpace(currCh) && IsUnicodeSpaceOrNull(nextCh) )
         return true;
     return false;
@@ -7257,6 +7316,9 @@ void ldomDocumentWriterFilter::appendStyle( const lChar16 * style )
     if ( _styleAttrId==0 ) {
         _styleAttrId = _document->getAttrNameIndex(L"style");
     }
+    if (!_document->getDocFlag(DOC_FLAG_ENABLE_INTERNAL_STYLES))
+        return; // disabled
+
     lString16 oldStyle = node->getAttributeValue(_styleAttrId);
     if ( !oldStyle.empty() && oldStyle.at(oldStyle.length()-1)!=';' )
         oldStyle << L"; ";
@@ -7646,8 +7708,9 @@ void tinyNodeCollection::setDocFlags( lUInt32 value )
 
 int tinyNodeCollection::getPersistenceFlags()
 {
-    int format = getProps()->getIntDef(DOC_PROP_FILE_FORMAT, 0);
+    int format = 2; //getProps()->getIntDef(DOC_PROP_FILE_FORMAT, 0);
     int flag = ( format==2 && getDocFlag(DOC_FLAG_PREFORMATTED_TEXT) ) ? 1 : 0;
+    CRLog::trace("getPersistenceFlags() returned %d", flag);
     return flag;
 }
 
@@ -7839,6 +7902,10 @@ ContinuousOperationResult ldomDocument::saveChanges( CRTimerUtil & maxTime )
     default:
     case 0:
 
+        if (!maxTime.infinite())
+            _cacheFile->flush(false, maxTime);
+        CHECK_EXPIRATION("flushing of stream")
+
         persist( maxTime );
         CHECK_EXPIRATION("persisting of node data")
 
@@ -7880,7 +7947,8 @@ ContinuousOperationResult ldomDocument::saveChanges( CRTimerUtil & maxTime )
             CRLog::error("Error while saving blob storage data");
             return CR_ERROR;
         }
-        _cacheFile->flush(false, maxTime); // intermediate flush
+        if (!maxTime.infinite())
+            _cacheFile->flush(false, maxTime); // intermediate flush
         CHECK_EXPIRATION("saving blob storage data")
         // fall through
     case 4:
@@ -7891,7 +7959,8 @@ ContinuousOperationResult ldomDocument::saveChanges( CRTimerUtil & maxTime )
             CRLog::error("Error while saving node style data");
             return CR_ERROR;
         }
-        _cacheFile->flush(false, maxTime); // intermediate flush
+        if (!maxTime.infinite())
+            _cacheFile->flush(false, maxTime); // intermediate flush
         CHECK_EXPIRATION("saving node style storage")
         // fall through
     case 5:
@@ -7905,11 +7974,13 @@ ContinuousOperationResult ldomDocument::saveChanges( CRTimerUtil & maxTime )
                 return CR_ERROR;
             }
         }
-        _cacheFile->flush(false, maxTime); // intermediate flush
+        if (!maxTime.infinite())
+            _cacheFile->flush(false, maxTime); // intermediate flush
         CHECK_EXPIRATION("saving props data")
         // fall through
     case 6:
         _mapSavingStage = 6;
+        CRLog::trace("ldomDocument::saveChanges() - ID data");
         {
             SerialBuf idbuf(4096);
             serializeMaps( idbuf );
@@ -7918,7 +7989,8 @@ ContinuousOperationResult ldomDocument::saveChanges( CRTimerUtil & maxTime )
                 return CR_ERROR;
             }
         }
-        _cacheFile->flush(false, maxTime); // intermediate flush
+        if (!maxTime.infinite())
+            _cacheFile->flush(false, maxTime); // intermediate flush
         CHECK_EXPIRATION("saving ID data")
         // fall through
     case 7:
@@ -7932,7 +8004,8 @@ ContinuousOperationResult ldomDocument::saveChanges( CRTimerUtil & maxTime )
         } else {
             CRLog::trace("ldomDocument::saveChanges() - no page data");
         }
-        _cacheFile->flush(false, maxTime); // intermediate flush
+        if (!maxTime.infinite())
+            _cacheFile->flush(false, maxTime); // intermediate flush
         CHECK_EXPIRATION("saving page data")
         // fall through
     case 8:
@@ -7943,7 +8016,8 @@ ContinuousOperationResult ldomDocument::saveChanges( CRTimerUtil & maxTime )
             CRLog::error("Error while node instance data");
             return CR_ERROR;
         }
-        _cacheFile->flush(false, maxTime); // intermediate flush
+        if (!maxTime.infinite())
+            _cacheFile->flush(false, maxTime); // intermediate flush
         CHECK_EXPIRATION("saving node data")
         // fall through
     case 9:
@@ -7974,7 +8048,8 @@ ContinuousOperationResult ldomDocument::saveChanges( CRTimerUtil & maxTime )
                 return CR_ERROR;
             }
         }
-        _cacheFile->flush(false, maxTime); // intermediate flush
+        if (!maxTime.infinite())
+            _cacheFile->flush(false, maxTime); // intermediate flush
         CHECK_EXPIRATION("saving TOC data")
         // fall through
     case 10:
@@ -8087,7 +8162,7 @@ lUInt32 tinyNodeCollection::calcStyleHash()
     lUInt32 res = 0; //_elemCount;
     lUInt32 globalHash = calcGlobalSettingsHash();
     lUInt32 docFlags = getDocFlags();
-//    CRLog::info("Calculating style hash...  elemCount=%d, globalHash=%08x, docFlags=%08x", _elemCount, globalHash, docFlags);
+    //CRLog::info("Calculating style hash...  elemCount=%d, globalHash=%08x, docFlags=%08x", _elemCount, globalHash, docFlags);
     for ( int i=0; i<count; i++ ) {
         int offs = i*TNC_PART_LEN;
         int sz = TNC_PART_LEN;
@@ -8111,7 +8186,9 @@ lUInt32 tinyNodeCollection::calcStyleHash()
             }
         }
     }
+    CRLog::info("Calculating style hash...  elemCount=%d, globalHash=%08x, docFlags=%08x, nodeStyleHash=%08x", _elemCount, globalHash, docFlags, res);
     res = res * 31 + _imgScalingOptions.getHash();
+    res = res * 31 + _minSpaceCondensingPercent;
     res = (res * 31 + globalHash) * 31 + docFlags;
 //    CRLog::info("Calculated style hash = %08x", res);
     return res;
@@ -8514,6 +8591,7 @@ public:
     LVStreamRef openExisting( lString16 filename, lUInt32 crc, lUInt32 docFlags )
     {
         lString16 fn = makeFileName( filename, crc, docFlags );
+        CRLog::debug("ldomDocCache::openExisting(%s)", LCSTR(fn));
         LVStreamRef res;
         if ( findFileIndex( fn ) < 0 ) {
             CRLog::error( "ldomDocCache::openExisting - File %s is not found in cache index", UnicodeToUtf8(fn).c_str() );
@@ -8710,13 +8788,13 @@ bool ldomDocument::checkRenderContext()
 
         return true;
     }
-    _hdr.render_style_hash = styleHash;
-    _hdr.stylesheet_hash = stylesheetHash;
-    _hdr.render_dx = dx;
-    _hdr.render_dy = dy;
-    _hdr.render_docflags = _docFlags;
-    CRLog::info("New render properties: styleHash=%x, stylesheetHash=%x, docflags=%x, width=%x, height=%x",
-                _hdr.render_style_hash, _hdr.stylesheet_hash, _hdr.render_docflags, _hdr.render_dx, _hdr.render_dy);
+//    _hdr.render_style_hash = styleHash;
+//    _hdr.stylesheet_hash = stylesheetHash;
+//    _hdr.render_dx = dx;
+//    _hdr.render_dy = dy;
+//    _hdr.render_docflags = _docFlags;
+//    CRLog::info("New render properties: styleHash=%x, stylesheetHash=%x, docflags=%x, width=%x, height=%x",
+//                _hdr.render_style_hash, _hdr.stylesheet_hash, _hdr.render_docflags, _hdr.render_dx, _hdr.render_dy);
     return false;
 }
 
@@ -8724,6 +8802,7 @@ bool ldomDocument::checkRenderContext()
 
 void lxmlDocBase::setStyleSheet( const char * css, bool replace )
 {
+    lUInt32 oldHash = _stylesheet.getHash();
     if ( replace ) {
         //CRLog::debug("cleaning stylesheet contents");
         _stylesheet.clear();
@@ -8731,6 +8810,10 @@ void lxmlDocBase::setStyleSheet( const char * css, bool replace )
     if ( css && *css ) {
         //CRLog::debug("appending stylesheet contents: \n%s", css);
         _stylesheet.parse( css );
+    }
+    lUInt32 newHash = _stylesheet.getHash();
+    if (oldHash != newHash) {
+        CRLog::debug("New stylesheet hash: %08x", newHash);
     }
 }
 

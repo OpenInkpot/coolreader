@@ -6,6 +6,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
+import java.net.URI;
 import java.net.URL;
 import java.net.URLConnection;
 import java.text.ParseException;
@@ -26,8 +27,12 @@ import org.xml.sax.Attributes;
 import org.xml.sax.SAXException;
 import org.xml.sax.helpers.DefaultHandler;
 
+import android.util.Log;
+
 public class OPDSUtil {
 
+    public static final int CONNECT_TIMEOUT = 60000;
+    public static final int READ_TIMEOUT = 60000;
 	/*
 <?xml version="1.0" encoding="utf-8"?>
 <feed xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/" xmlns:relevance="http://a9.com/-/opensearch/extensions/relevance/1.0/" 
@@ -98,6 +103,13 @@ xml:base="http://lib.ololo.cc/opds/">
 		public LinkInfo nextLink;
 	}
 	
+	public static String dirPath(String filePath) {
+		int pos = filePath.lastIndexOf("/");
+		if (pos < 0)
+			return filePath;
+		return filePath.substring(0, pos+1);
+	}
+	
 	public static class LinkInfo {
 		public String href;
 		public String rel;
@@ -112,10 +124,15 @@ xml:base="http://lib.ololo.cc/opds/">
 		public static String convertHref( URL baseURL, String href ) {
 			if ( href==null )
 				return href;
+			String port = "";
+			if (baseURL.getPort() != 80)
+				port = ":" + baseURL.getPort();
+			String hostPort = baseURL.getHost() + port;
 			if ( href.startsWith("/") )
-				return baseURL.getProtocol() + "://" + baseURL.getHost() + href;
-			if ( !href.startsWith("http://") )
-				return baseURL.getProtocol() + "://" + baseURL.getHost() + "/" + baseURL.getPath() + "/" + href;
+				return baseURL.getProtocol() + "://" + hostPort + href;
+			if ( !href.startsWith("http://") ) {
+				return baseURL.getProtocol() + "://" + hostPort + dirPath(baseURL.getPath()) + "/" + href;
+			}
 			return href;
 		}
 		public boolean isValid() {
@@ -188,11 +205,11 @@ xml:base="http://lib.ololo.cc/opds/">
 		private EntryInfo entryInfo = new EntryInfo(); 
 		private ArrayList<EntryInfo> entries = new ArrayList<EntryInfo>(); 
 		private Stack<String> elements = new Stack<String>();
-		private Attributes currentAttributes;
+		//private Attributes currentAttributes;
 		private AuthorInfo authorInfo;
 		private boolean insideFeed;
 		private boolean insideEntry;
-		private boolean singleEntry;
+		//private boolean singleEntry;
 		private int level = 0;
 		//2011-05-31T10:28:22+04:00
 		private static SimpleDateFormat tsFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssZ"); 
@@ -310,7 +327,7 @@ xml:base="http://lib.ololo.cc/opds/">
 				localName = qName;
 			level++;
 			L.d(tab() + "<" + localName + ">");
-			currentAttributes = attributes;
+			//currentAttributes = attributes;
 			elements.push(localName);
 			//String currentElement = elements.peek();
 			if ( !insideFeed && "feed".equals(localName) ) {
@@ -318,7 +335,7 @@ xml:base="http://lib.ololo.cc/opds/">
 			} else if ( "entry".equals(localName) ) {
 				if ( !insideFeed ) {
 					insideFeed = true;
-					singleEntry = true;
+					//singleEntry = true;
 				}
 				insideEntry = true;
 				entryInfo = new EntryInfo();
@@ -385,7 +402,7 @@ xml:base="http://lib.ololo.cc/opds/">
 					entryInfo.authors.add(authorInfo);
 				authorInfo = null;
 			} 
-			currentAttributes = null;
+			//currentAttributes = null;
 			if ( level>0 )
 				level--;
 		}
@@ -416,6 +433,7 @@ xml:base="http://lib.ololo.cc/opds/">
 			this.referer = referer;
 			this.expectedType = expectedType;
 			this.defaultFileName = defaultFileName;
+			Log.d("cr3", "Created DownloadTask for " + url);
 		}
 		private void setProgressMessage( String url, int totalSize ) {
 			progressMessage = coolReader.getString(org.coolreader.R.string.progress_downloading) + " " + url;
@@ -430,7 +448,8 @@ xml:base="http://lib.ololo.cc/opds/">
 						delayedProgress.cancel();
 						delayedProgress.hide();
 					}
-					coolReader.getEngine().hideProgress();
+					if (coolReader.getEngine() != null)
+						coolReader.getEngine().hideProgress();
 					callback.onError(msg);
 				}
 			});
@@ -646,12 +665,12 @@ xml:base="http://lib.ololo.cc/opds/">
 			
 			boolean itemsLoadedPartially = false;
 			boolean loadNext = false;
-			HashSet<URL> visited = new HashSet<URL>();
+			HashSet<String> visited = new HashSet<String>();
 
 			do {
 			try {
 				setProgressMessage( url.toString(), -1 );
-				visited.add(url);
+				visited.add(url.toString());
 				long startTimeStamp = System.currentTimeMillis();
 				delayedProgress = coolReader.getEngine().showProgressDelayed(0, progressMessage, PROGRESS_DELAY_MILLIS); 
 				URLConnection conn = url.openConnection();
@@ -669,8 +688,8 @@ xml:base="http://lib.ololo.cc/opds/">
 	            	connection.setRequestProperty("Referer", referer);
 	            connection.setInstanceFollowRedirects(true);
 	            connection.setAllowUserInteraction(false);
-	            connection.setConnectTimeout(20000);
-	            connection.setReadTimeout(40000);
+	            connection.setConnectTimeout(CONNECT_TIMEOUT);
+	            connection.setReadTimeout(READ_TIMEOUT);
 	            connection.setDoInput(true);
 	            String fileName = null;
 	            String disp = connection.getHeaderField("Content-Disposition");
@@ -723,9 +742,14 @@ xml:base="http://lib.ololo.cc/opds/">
 					parseFeed( is );
 					itemsLoadedPartially = true;
 					if (handler.docInfo.nextLink!=null && handler.docInfo.nextLink.type.startsWith("application/atom+xml;profile=opds-catalog")) {
-						url = new URL(handler.docInfo.nextLink.href);
-						loadNext = !visited.contains(url);
-						L.d("continue with next part: " + url);
+						if (handler.entries.size() < MAX_OPDS_ITEMS) {
+							url = new URL(handler.docInfo.nextLink.href);
+							loadNext = !visited.contains(url.toString());
+							L.d("continue with next part: " + url);
+						} else {
+							L.d("max item count reached: " + handler.entries.size());
+							loadNext = false;
+						}
 					} else {
 						loadNext = false;
 					}
@@ -885,5 +909,6 @@ xml:base="http://lib.ololo.cc/opds/">
 		return buf.toString();
 	}
 	
-	public static final int PROGRESS_DELAY_MILLIS = 2000; 
+	public static final int PROGRESS_DELAY_MILLIS = 2000;
+	public static final int MAX_OPDS_ITEMS = 1000;
 }

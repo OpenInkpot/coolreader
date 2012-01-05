@@ -8,6 +8,7 @@ import android.database.Cursor;
 import android.database.DatabaseUtils;
 import android.database.SQLException;
 import android.database.sqlite.SQLiteDatabase;
+import android.database.sqlite.SQLiteException;
 import android.database.sqlite.SQLiteStatement;
 import android.util.Log;
 
@@ -15,13 +16,72 @@ public class CRDB {
 	static final boolean DROP_TABLES = false; // for debug purposes
 	SQLiteDatabase mDB;
 	File mDBFile;
-	protected boolean open( File dbfile )
+	SQLiteDatabase mCoverpageDB;
+	//File mCoverpageDBFile;
+
+	private boolean moveToBackup(File f) {
+		Log.e("cr3", "Moving corrupted DB file to backup.");
+		File f2 = null;
+		for (int i=2; i<100; i++) {
+			f2 = new File(f.getAbsoluteFile() + ".bak." + i);
+			if (!f2.exists())
+				break;
+		}
+		if (!f.renameTo(f2)) {
+			Log.e("cr3", "Cannot rename DB file " + f + " to " + f2);
+			if (!f.delete()) {
+				Log.e("cr3", "Cannot remove DB file " + f);
+				return false;
+			}
+		}
+		return true;
+	}
+
+	private void openCoverpageDB(File coverFile) {
+		try {
+			this.mCoverpageDB = SQLiteDatabase.openOrCreateDatabase(coverFile, null);
+		} catch (SQLiteException e) {
+			moveToBackup(coverFile);
+			this.mCoverpageDB = SQLiteDatabase.openOrCreateDatabase(coverFile, null);
+			try {
+				this.mCoverpageDB = SQLiteDatabase.openOrCreateDatabase(coverFile, null);
+			} catch (SQLiteException e2) {
+				throw new SQLiteException("can't open DB " + coverFile + ": " + e2.getMessage());
+			}
+		}
+	}
+	
+	synchronized protected boolean open( File dbfile )
 	{
+		File coverFile = new File(dbfile.getAbsolutePath().replace(".sqlite", "_cover.sqlite"));
 		L.i("Opening database from " + dbfile.getAbsolutePath());
-		mDB = SQLiteDatabase.openOrCreateDatabase(dbfile, null);
+		try {
+			this.mDB = SQLiteDatabase.openOrCreateDatabase(dbfile, null);
+			openCoverpageDB(coverFile);
+			try {
+				updateSchema();
+			} catch (SQLiteException e) {
+				throw (SQLiteException)new SQLiteException("error updating schema " + mDBFile + ": " + e.getMessage()).initCause(e);
+			}
+		} catch (SQLiteException e) {
+			moveToBackup(dbfile);
+			moveToBackup(coverFile);
+			try {
+				this.mDB = SQLiteDatabase.openOrCreateDatabase(dbfile, null);
+				openCoverpageDB(coverFile);
+			} catch (SQLiteException e2) {
+				throw (SQLiteException)new SQLiteException("can't open DB " + dbfile + ": " + e2.getMessage()).initCause(e2);
+			}
+			try {
+				updateSchema();
+			} catch (SQLiteException e2) {
+				throw (SQLiteException)new SQLiteException("error updating schema " + mDBFile + ": " + e2.getMessage()).initCause(e2);
+			}
+		}
 		this.mDBFile = dbfile;
 		return true;
 	}
+
 	protected void dropTables()
 	{
 		String[] tableNames = new String[] {
@@ -29,6 +89,7 @@ public class CRDB {
 		};
 		for ( String name : tableNames )
 			mDB.execSQL("DROP TABLE IF EXISTS " + name);
+		mCoverpageDB.execSQL("DROP TABLE IF EXISTS coverpage");
 	}
 	
 	private void execSQLIgnoreErrors( String... sqls )
@@ -39,6 +100,18 @@ public class CRDB {
 			} catch ( SQLException e ) {
 				// ignore
 				Log.w("cr3", "query failed, ignoring: " + sql);
+			}
+		}
+	}
+
+	private void execSQLCoverpageIgnoreErrors( String... sqls )
+	{
+		for ( String sql : sqls ) {
+			try { 
+				mCoverpageDB.execSQL(sql);
+			} catch ( SQLException e ) {
+				// ignore
+				Log.w("cr3", "cp query failed, ignoring: " + sql);
 			}
 		}
 	}
@@ -56,6 +129,19 @@ public class CRDB {
 		}
 	}
 
+	private void execCoverpageSQL( String... sqls )
+	{
+		for ( String sql : sqls ) {
+			try { 
+				mCoverpageDB.execSQL(sql);
+			} catch ( SQLException e ) {
+				// ignore
+				Log.w("cr3", "cp query failed: " + sql);
+				throw e;
+			}
+		}
+	}
+
 	private final static String[] COVERPAGE_SCHEMA = new String[] {
 		"CREATE TABLE IF NOT EXISTS coverpage (" +
 		"book_fk INTEGER NOT NULL REFERENCES book (id)," +
@@ -63,7 +149,7 @@ public class CRDB {
 		")"
 	};
 	
-	public final int DB_VERSION = 4;
+	public final int DB_VERSION = 8;
 	protected boolean updateSchema()
 	{
 		if (DROP_TABLES)
@@ -136,7 +222,7 @@ public class CRDB {
 				")");
 		execSQL("CREATE INDEX IF NOT EXISTS " +
 		"bookmark_book_index ON bookmark (book_fk) ");
-		execSQL(COVERPAGE_SCHEMA);
+		execCoverpageSQL(COVERPAGE_SCHEMA);
 		int currentVersion = mDB.getVersion();
 		// version 1 updates ====================================================================
 		if ( currentVersion<1 )
@@ -145,18 +231,247 @@ public class CRDB {
 			execSQLIgnoreErrors(COVERPAGE_SCHEMA);
 		if ( currentVersion<4 )
 			execSQLIgnoreErrors("ALTER TABLE book ADD COLUMN flags INTEGER DEFAULT 0");
-		// version 2 updates ====================================================================
+		if ( currentVersion>0 && currentVersion<5 )
+			migrateCoverpages();
+		if ( currentVersion<6 )
+			execSQL("CREATE TABLE IF NOT EXISTS opds_catalog (" +
+					"id INTEGER PRIMARY KEY AUTOINCREMENT, " +
+					"name VARCHAR NOT NULL COLLATE NOCASE, " +
+					"url VARCHAR NOT NULL COLLATE NOCASE" +
+					")");
+		if ( currentVersion<7 ) {
+			addOPDSCatalogs(DEF_OPDS_URLS1);
+			if (!DeviceInfo.NOFLIBUSTA)
+				addOPDSCatalogs(DEF_OPDS_URLS1A);
+		}
+		if ( currentVersion<8 )
+			addOPDSCatalogs(DEF_OPDS_URLS2);
 		// TODO: add more updates here
+			
 		// set current version
 		if ( currentVersion<DB_VERSION )
 			mDB.setVersion(DB_VERSION);
 		return true;
 	}
 	
+	private final static String[] DEF_OPDS_URLS1 = {
+			"http://www.feedbooks.com/catalog.atom", "Feedbooks",
+			"http://bookserver.archive.org/catalog/", "Internet Archive",
+			"http://m.gutenberg.org/", "Project Gutenberg", 
+//			"http://ebooksearch.webfactional.com/catalog.atom", "eBookSearch", 
+			"http://bookserver.revues.org/", "Revues.org", 
+			"http://www.legimi.com/opds/root.atom", "Legimi",
+			"http://www.ebooksgratuits.com/opds/", "Ebooks libres et gratuits",
+	};
+
+	private final static String[] DEF_OPDS_URLS1A = {
+		"http://flibusta.net/opds/", "Flibusta", 
+};
+
+	private final static String[] DEF_OPDS_URLS2 = {
+		"http://www.shucang.com/s/index.php", "ShuCang.com",
+    };
+
+	private void addOPDSCatalogs(String[] catalogs) {
+		for (int i=0; i<catalogs.length-1; i+=2) {
+			String url = catalogs[i];
+			String name = catalogs[i+1];
+			saveOPDSCatalog(null, url, name);
+		}
+	}
+
+	public boolean loadAuthorBooks(FileInfo parent) {
+		Log.i("cr3", "loadAuthorBooks()");
+		parent.clear();
+		boolean found = false;
+		if (!parent.isBooksByAuthorDir())
+			return false;
+		long id = parent.getAuthorId();
+		if (id == 0)
+			return false;
+		ArrayList<FileInfo> list = new ArrayList<FileInfo>();
+		if (findAuthorBooks(list, id)) {
+			for (FileInfo file : list) {
+				file.parent = parent;
+				parent.addFile(file);
+			}
+		}
+		return found;
+	}
+
+	public boolean loadAuthorsList(FileInfo parent) {
+		Log.i("cr3", "loadAuthorsList()");
+		parent.clear();
+		boolean found = false;
+		Cursor rs = null;
+		FileInfo letterDir = null;
+		String lastAuthorFirstLetter = null;
+		try {
+			String sql = "SELECT author.id, author.name, count(*) as book_count FROM author INNER JOIN book_author ON book_author.author_fk = author.id GROUP BY author.id, author.name ORDER BY author.name";
+			rs = mDB.rawQuery(sql, null);
+			if ( rs.moveToFirst() ) {
+				// remove existing entries
+				parent.clear();
+				// read DB
+				do {
+					long id = rs.getLong(0);
+					String name = rs.getString(1);
+					Integer bookCount = rs.getInt(2);
+					String firstLetter = (name!=null && name.length()>0) ? name.substring(0, 1).toUpperCase() : "_";
+					if (letterDir == null || !firstLetter.equals(lastAuthorFirstLetter)) {
+						letterDir = new FileInfo();
+						letterDir.isDirectory = true;
+						letterDir.pathname = FileInfo.AUTHOR_GROUP_PREFIX + firstLetter;
+						letterDir.filename = firstLetter + "...";
+						letterDir.isListed = true;
+						letterDir.isScanned = true;
+						letterDir.parent = parent;
+						letterDir.id = id;
+						lastAuthorFirstLetter = firstLetter;
+						parent.addDir(letterDir);
+						found = true;
+					}
+					FileInfo author = new FileInfo();
+					author.isDirectory = true;
+					author.pathname = FileInfo.AUTHOR_PREFIX + id;
+					author.filename = name;
+					author.isListed = true;
+					author.isScanned = true;
+					author.parent = parent;
+					author.id = id;
+					author.tag = bookCount;
+					letterDir.addDir(author);
+					found = true;
+				} while (rs.moveToNext());
+			}
+		} catch (Exception e) {
+			Log.e("cr3", "exception while loading list of authors", e);
+		} finally {
+			if ( rs!=null )
+				rs.close();
+		}
+		return found;
+	}
+	
+	private static String quoteSqlString(String src) {
+		if (src==null)
+			return "null";
+		String s = src.replaceAll("\\'", "\\\\'");
+		return "'" + s + "'";
+	}
+	
+	public boolean saveOPDSCatalog(Long id, String url, String name) {
+		if (url==null || name==null)
+			return false;
+		url = url.trim();
+		name = name.trim();
+		if (url.length()==0 || name.length()==0)
+			return false;
+		try {
+			Long existingIdByUrl = longQuery("SELECT id FROM opds_catalog WHERE url=" + quoteSqlString(url));
+			Long existingIdByName = longQuery("SELECT id FROM opds_catalog WHERE name=" + quoteSqlString(name));
+			if (existingIdByUrl!=null && existingIdByName!=null && !existingIdByName.equals(existingIdByUrl))
+				return false; // duplicates detected
+			if (id==null) {
+				id = existingIdByUrl;
+				if (id==null)
+					id = existingIdByName;
+			}
+			if (id==null) {
+				// insert new
+				execSQL("INSERT INTO opds_catalog (name, url) VALUES ("+quoteSqlString(name)+", "+quoteSqlString(url)+")");
+			} else {
+				// update existing
+				execSQL("UPDATE opds_catalog SET name="+quoteSqlString(name)+", url="+quoteSqlString(url)+" WHERE id=" + id);
+			}
+				
+		} catch (Exception e) {
+			Log.e("cr3", "exception while saving OPDS catalog item", e);
+			return false;
+		}
+		return true;
+	}
+
+	synchronized public boolean loadOPDSCatalogs(FileInfo parent) {
+		Log.i("cr3", "loadOPDSCatalogs()");
+		boolean found = false;
+		Cursor rs = null;
+		try {
+			String sql = "SELECT id, name, url FROM opds_catalog";
+			rs = mDB.rawQuery(sql, null);
+			if ( rs.moveToFirst() ) {
+				// remove existing entries
+				parent.clear();
+				// read DB
+				do {
+					Long id = rs.getLong(0);
+					String name = rs.getString(1);
+					String url = rs.getString(2);
+					FileInfo opds = new FileInfo();
+					opds.isDirectory = true;
+					opds.pathname = FileInfo.OPDS_DIR_PREFIX + url;
+					opds.filename = name;
+					opds.isListed = true;
+					opds.isScanned = true;
+					opds.parent = parent;
+					opds.id = id;
+					parent.addDir(opds);
+					found = true;
+				} while (rs.moveToNext());
+			}
+		} catch (Exception e) {
+			Log.e("cr3", "exception while loading list of OPDS catalogs", e);
+		} finally {
+			if ( rs!=null )
+				rs.close();
+		}
+		return found;
+	}
+	
+	public void removeOPDSCatalog(Long id) {
+		Log.i("cr3", "removeOPDSCatalog(" + id + ")");
+		execSQLIgnoreErrors("DELETE FROM opds_catalog WHERE id = " + id);
+	}
+
+	private void migrateCoverpages() {
+		Thread migrationThread = new Thread() {
+			@Override
+			public void run() {
+				Log.i("cr3", "Migration thread is started");
+				try {
+					String sql = "SELECT book_fk, imagedata FROM coverpage";
+					Cursor rs = null;
+					try {
+						rs = mDB.rawQuery(sql, null);
+						if ( rs.moveToFirst() ) {
+							do {
+								long id = rs.getLong(0);
+								byte[] data = rs.getBlob(1);
+								if (data!=null && data.length>0) {
+									Log.i("cr3", "Moving coverpage for bookId=" + id + " (" + data.length + " bytes)");
+									saveBookCoverpage(id, data);
+								}
+							} while (rs.moveToNext());
+							execSQLIgnoreErrors("DROP TABLE IF EXISTS coverpage");
+						}
+					} finally {
+						if (rs!=null)
+							rs.close();
+					}
+				} catch (Exception e) {
+					Log.e("cr3", "Exception while moving cover pages", e);
+				}
+				Log.i("cr3", "Migration thread is finished");
+			}
+			
+		};
+		migrationThread.start();
+	}
+	
 	public CRDB( File dbfile )
 	{
 		open(dbfile);
-		updateSchema();
+
 		dumpStatistics();
 	}
 	
@@ -386,26 +701,69 @@ public class CRDB {
 		return found;
 	}
 	
+	synchronized public boolean findAuthorBooks(ArrayList<FileInfo> list, long authorId)
+	{
+		String sql = READ_FILEINFO_SQL + " LEFT JOIN book_author ON book_author.book_fk = b.id WHERE book_author.author_fk = " + authorId + " ORDER BY b.title";
+		Cursor rs = null;
+		boolean found = false;
+		try {
+			rs = mDB.rawQuery(sql, null);
+			if ( rs.moveToFirst() ) {
+				do {
+					FileInfo fileInfo = new FileInfo();
+					readFileInfoFromCursor( fileInfo, rs );
+					if ( !fileInfo.fileExists() )
+						continue;
+					list.add(fileInfo);
+					found = true;
+				} while (rs.moveToNext());
+			}
+		} finally {
+			if (rs != null)
+				rs.close();
+		}
+		return found;
+	}
+	
 	private Long longQuery( String sql )
 	{
-		SQLiteStatement stmt = mDB.compileStatement(sql);
+		SQLiteStatement stmt = null;
 		try {
+			stmt = mDB.compileStatement(sql);
 			return stmt.simpleQueryForLong();
 		} catch ( Exception e ) {
 			// not found or error
 			return null;
+		} finally {
+			if (stmt != null)
+				stmt.close();
 		}
 	}
 	
-	public void saveBookCoverpage( long bookId, byte[] data )
+	private Long longCoverpageQuery( String sql )
+	{
+		SQLiteStatement stmt = null;
+		try {
+			stmt = mCoverpageDB.compileStatement(sql);
+			return stmt.simpleQueryForLong();
+		} catch ( Exception e ) {
+			// not found or error
+			return null;
+		} finally {
+			if (stmt != null)
+				stmt.close();
+		}
+	}
+	
+	synchronized public void saveBookCoverpage( long bookId, byte[] data )
 	{
 		if ( data==null )
 			return;
 		SQLiteStatement stmt = null;
 		try { 
-			Long existing = longQuery("SELECT book_fk FROM coverpage WHERE book_fk=" + bookId);
+			Long existing = longCoverpageQuery("SELECT book_fk FROM coverpage WHERE book_fk=" + bookId);
 			if ( existing==null ) {
-				stmt = mDB.compileStatement("INSERT INTO coverpage (book_fk, imagedata) VALUES ("+bookId+", ?)");
+				stmt = mCoverpageDB.compileStatement("INSERT INTO coverpage (book_fk, imagedata) VALUES ("+bookId+", ?)");
 				stmt.bindBlob(1, data);
 				stmt.execute();
 				Log.v("cr3", "db: saved " + data.length + " bytes of cover page for book " + bookId);
@@ -417,16 +775,16 @@ public class CRDB {
 				stmt.close();
 		}
 	}
-	public byte[] loadBookCoverpage( long bookId )
+	synchronized public byte[] loadBookCoverpage( long bookId )
 	{
 		Cursor rs = null;
 		try {
-			rs = mDB.rawQuery("SELECT imagedata FROM coverpage WHERE book_fk=" + bookId, null);
+			rs = mCoverpageDB.rawQuery("SELECT imagedata FROM coverpage WHERE book_fk=" + bookId, null);
 			if ( rs.moveToFirst() ) {
 				return rs.getBlob(0);
 			}
 			return null;
-		} catch ( SQLException e ) {
+		} catch ( Exception e ) {
 			Log.e("cr3", "error while reading coverpage for book " + bookId + ": " + e.getMessage());
 			return null;
 		} finally {
@@ -435,14 +793,14 @@ public class CRDB {
 		}
 	}
 	
-	public void dumpStatistics()
+	synchronized public void dumpStatistics()
 	{
 		Log.i("cr3db", "DB: " + longQuery("SELECT count(*) FROM author") + " authors, "
 				 + longQuery("SELECT count(*) FROM series") + " series, "
 				 + longQuery("SELECT count(*) FROM book") + " books, "
 				 + longQuery("SELECT count(*) FROM bookmark") + " bookmarks"
 				 + longQuery("SELECT count(*) FROM folder") + " folders"
-				 + longQuery("SELECT count(*) FROM coverpage") + " coverpages"
+				 + longCoverpageQuery("SELECT count(*) FROM coverpage") + " coverpages"
 				 );
 	}
 
@@ -734,12 +1092,17 @@ public class CRDB {
 
 	synchronized public boolean save( BookInfo bookInfo )
 	{
-		Log.d("cr3db", "saving Book info id=" + bookInfo.getFileInfo().id);
 		if ( mDB==null ) {
 			Log.e("cr3db", "cannot save book info : DB is closed");
 			return false;
 		}
-		boolean res = save(bookInfo.getFileInfo());
+		if (bookInfo==null || bookInfo.getFileInfo()==null)
+			return false;
+		boolean res = true;
+		if (bookInfo.getFileInfo().isModified || bookInfo.getFileInfo().id==null) {
+			res = save(bookInfo.getFileInfo()) && res;
+			Log.d("cr3db", "saving Book info id=" + bookInfo.getFileInfo().id);
+		}
 		for ( int i=0; i<bookInfo.getBookmarkCount(); i++ ) {
 			 Bookmark bmk  = bookInfo.getBookmark(i);
 			 if (bmk.isModified())
@@ -804,37 +1167,41 @@ public class CRDB {
 	synchronized public boolean save( FileInfo fileInfo )
 	{
 		boolean authorsChanged = true;
-		if ( fileInfo.id!=null ) {
-			// update
-			FileInfo oldValue = new FileInfo();
-			oldValue.id = fileInfo.id;
-			if ( findById(oldValue) ) {
-				// found, updating
-				QueryHelper h = new QueryHelper(fileInfo, oldValue);
-				h.update(fileInfo.id);
-				authorsChanged = !eq(fileInfo.authors, oldValue.authors);
+		try {
+			if ( fileInfo.id!=null ) {
+				// update
+				FileInfo oldValue = new FileInfo();
+				oldValue.id = fileInfo.id;
+				if ( findById(oldValue) ) {
+					// found, updating
+					QueryHelper h = new QueryHelper(fileInfo, oldValue);
+					h.update(fileInfo.id);
+					authorsChanged = !eq(fileInfo.authors, oldValue.authors);
+				} else {
+					oldValue = new FileInfo();
+					QueryHelper h = new QueryHelper(fileInfo, oldValue);
+					fileInfo.id = h.insert();
+				}
 			} else {
-				oldValue = new FileInfo();
+				FileInfo oldValue = new FileInfo();
 				QueryHelper h = new QueryHelper(fileInfo, oldValue);
 				fileInfo.id = h.insert();
 			}
-		} else {
-			FileInfo oldValue = new FileInfo();
-			QueryHelper h = new QueryHelper(fileInfo, oldValue);
-			fileInfo.id = h.insert();
-		}
-		fileInfo.setModified(false);
-		if ( fileInfo.id!=null ) {
-			if ( authorsChanged ) {
-				Long[] authorIds = getAuthorIds(fileInfo.authors);
-				saveBookAuthors(fileInfo.id, authorIds);
+			fileInfo.setModified(false);
+			if ( fileInfo.id!=null ) {
+				if ( authorsChanged ) {
+					Long[] authorIds = getAuthorIds(fileInfo.authors);
+					saveBookAuthors(fileInfo.id, authorIds);
+				}
+				return true;
 			}
-			return true;
+			return false;
+		} catch (SQLiteException e) {
+			throw new SQLiteException("error while writing to DB " + mDBFile + ": " + e.getMessage());
 		}
-		return false;
 	}
 
-    public void flush()
+	synchronized public void flush()
     {
         Log.i("cr3db", "Flushing DB");
         if ( seriesStmt!=null) {
@@ -856,7 +1223,7 @@ public class CRDB {
         SQLiteDatabase.releaseMemory();
     }
     
-	public void close()
+	synchronized public void close()
 	{
 	    flush();
 		Log.i("cr3db", "Closing DB");
@@ -864,6 +1231,9 @@ public class CRDB {
 			mDB.close();
 			mDB = null;
 		}
-		
+		if ( mCoverpageDB!=null && mCoverpageDB.isOpen() ) {
+			mCoverpageDB.close();
+			mCoverpageDB = null;
+		}
 	}
 }

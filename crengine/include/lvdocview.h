@@ -24,6 +24,7 @@
 // standard properties supported by LVDocView
 #define PROP_FONT_GAMMA              "font.gamma" // currently supported: 0.65 .. 1.35, see gammatbl.h
 #define PROP_FONT_ANTIALIASING       "font.antialiasing.mode"
+#define PROP_FONT_HINTING            "font.hinting.mode"
 #define PROP_FONT_COLOR              "font.color.default"
 #define PROP_FONT_FACE               "font.face.default"
 #define PROP_FONT_WEIGHT_EMBOLDEN    "font.face.weight.embolden"
@@ -68,6 +69,7 @@
 #define PROP_AUTOSAVE_BOOKMARKS      "crengine.autosave.bookmarks"
 
 #define PROP_FLOATING_PUNCTUATION    "crengine.style.floating.punctuation.enabled"
+#define PROP_FORMAT_MIN_SPACE_CONDENSING_PERCENT "crengine.style.space.condensing.percent"
 
 #define PROP_FILE_PROPS_FONT_SIZE    "cr3.file.props.font.size"
 
@@ -296,6 +298,10 @@ enum LVDocCmd
     DCMD_SELECT_MOVE_LEFT_BOUND_BY_WORDS, // move selection start by words
     DCMD_SELECT_MOVE_RIGHT_BOUND_BY_WORDS, // move selection end by words
 
+    // 136
+    DCMD_SET_TEXT_FORMAT, // set text format, param=1 to autoformat, 0 for preformatted
+
+
     //=======================================
     DCMD_EDIT_CURSOR_LEFT,
     DCMD_EDIT_CURSOR_RIGHT,
@@ -490,6 +496,8 @@ private:
     virtual void OnCacheFileFormatDetected( doc_format_t fmt );
     void insertBookmarkPercentInfo(int start_page, int end_y, int percent);
 
+    void updateDocStyleSheet();
+
 protected:
     /// draw to specified buffer by either Y pos or page number (unused param should be -1)
     void Draw( LVDrawBuf & drawbuf, int pageTopPosition, int pageNumber, bool rotate );
@@ -578,8 +586,12 @@ public:
     CRBookmark * saveCurrentPageBookmark( lString16 comment );
     /// removes bookmark from list, and deletes it, false if not found
     bool removeBookmark( CRBookmark * bm );
+    /// sets new list of bookmarks, removes old values
+    void setBookmarkList(LVPtrVector<CRBookmark> & bookmarks);
     /// restores page using bookmark by numbered shortcut
 	bool goToPageShortcutBookmark( int number );
+    /// find bookmark by window point, return NULL if point doesn't belong to any bookmark
+    CRBookmark * findBookmarkByPoint(lvPoint pt);
     /// returns true if coverpage display is on
     bool getShowCover() { return  m_showCover; }
     /// sets coverpage display flag
@@ -628,6 +640,8 @@ public:
     virtual void selectRange( const ldomXRange & range );
     /// sets selection for list of words, clears previous selection
     virtual void selectWords( const LVArray<ldomWord> & words );
+    /// sets selections for ranges, clears previous selections
+    virtual void selectRanges(ldomXRangeList & ranges);
     /// clears selection
     virtual void clearSelection();
     /// update selection -- command handler
@@ -690,6 +704,10 @@ public:
     LVRef<ldomXRange> getPageDocumentRange( int pageIndex=-1 );
     /// get page text, -1 for current page
     lString16 getPageText( bool wrapWords, int pageIndex=-1 );
+    /// returns number of non-space characters on current page
+    int getCurrentPageCharCount();
+    /// returns number of images on current page
+    int getCurrentPageImageCount();
     /// calculate page header rectangle
     virtual void getPageHeaderRectangle( int pageIndex, lvRect & headerRc );
     /// calculate page header height
@@ -802,6 +820,10 @@ public:
 
     /// returns xpointer for specified window point
     ldomXPointer getNodeByPoint( lvPoint pt );
+    /// returns image source for specified window point, if point is inside image
+    LVImageSourceRef getImageByPoint(lvPoint pt);
+    /// draws scaled image into buffer, clear background according to current settings
+    bool drawImage(LVDrawBuf * buf, LVImageSourceRef img, int x, int y, int dx, int dy);
     /// converts point from window to document coordinates, returns true if success
     bool windowToDocPoint( lvPoint & pt );
     /// converts point from documsnt to window coordinates, returns true if success
@@ -913,7 +935,7 @@ public:
     /// get number of current page
     int getCurPage();
     /// move to specified page
-    bool goToPage( int page );
+    bool goToPage(int page, bool updatePosBookmark = true);
     /// returns page count
     int getPageCount();
 

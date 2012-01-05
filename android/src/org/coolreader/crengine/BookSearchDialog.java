@@ -27,7 +27,7 @@ public class BookSearchDialog extends BaseDialog {
 	
 	public BookSearchDialog( CoolReader activity, SearchCallback callback )
 	{
-		super(activity, R.string.dlg_button_find, R.string.dlg_button_cancel, false);
+		super(activity, activity.getString( R.string.dlg_book_search), true, false);
 		mCoolReader = activity;
 		this.callback = callback;
 		setTitle(mCoolReader.getString( R.string.dlg_book_search));
@@ -112,6 +112,8 @@ public class BookSearchDialog extends BaseDialog {
 		BackgroundThread.instance().executeBackground( new Runnable() {
 			@Override
 			public void run() {
+				if (mCoolReader == null || mCoolReader.getDB() == null)
+					return;
 				final FileInfo[] results = mCoolReader.getDB().findByPatterns(MAX_RESULTS, author, title, series, filename);
 				BackgroundThread.instance().executeGUI( new Runnable() {
 					@Override

@@ -5,6 +5,7 @@
 #include "crqtutil.h"
 #include "qpainter.h"
 #include "settings.h"
+#include "addbookmarkdlg.h"
 #include <QtGui/QResizeEvent>
 #include <QtGui/QScrollBar>
 #include <QtGui/QMenu>
@@ -385,15 +386,16 @@ QString CR3View::endWordSelection() {
 }
 #endif
 
-void CR3View::setHyphDir( QString dirname )
+void CR3View::setHyphDir(QString dirname, bool clear)
 {
-    HyphMan::initDictionaries( qt2cr( dirname) );
+    HyphMan::initDictionaries(qt2cr( dirname), clear);
     _hyphDicts.clear();
     for ( int i=0; i<HyphMan::getDictList()->length(); i++ ) {
         HyphDictionary * item = HyphMan::getDictList()->get( i );
-        QString fn = cr2qt( item->getFilename() );
+        QString fn = cr2qt(item->getId()); //item->getFilename() );
         _hyphDicts.append( fn );
     }
+    //_hyphDicts.sort();
 }
 
 const QStringList & CR3View::getHyphDicts()
@@ -445,7 +447,7 @@ bool CR3View::loadDocument( QString fileName )
     clearSelection();
     bool res = _docview->LoadDocument( qt2cr(fileName).c_str() );
     if ( res ) {
-        _docview->swapToCache();
+        //_docview->swapToCache();
         QByteArray utf8 = fileName.toUtf8();
         CRLog::debug( "Trying to restore position for %s", utf8.constData() );
         _docview->restorePosition();
@@ -935,11 +937,17 @@ bool CR3View::updateSelection( ldomXPointer p )
         return false;
     r.sort();
     if ( !_editMode ) {
-        if ( !r.getStart().isVisibleWordStart() )
+        if ( !r.getStart().isVisibleWordStart() ) {
+            //CRLog::trace("calling prevVisibleWordStart : %s", LCSTR(r.getStart().toString()));
             r.getStart().prevVisibleWordStart();
+            //CRLog::trace("updated : %s", LCSTR(r.getStart().toString()));
+        }
         //lString16 start = r.getStart().toString();
-        if ( !r.getEnd().isVisibleWordEnd() )
+        if ( !r.getEnd().isVisibleWordEnd() ) {
+            //CRLog::trace("calling nextVisibleWordEnd : %s", LCSTR(r.getEnd().toString()));
             r.getEnd().nextVisibleWordEnd();
+            //CRLog::trace("updated : %s", LCSTR(r.getEnd().toString()));
+        }
     }
     if ( r.isNull() )
         return false;
@@ -958,9 +966,19 @@ void CR3View::mousePressEvent ( QMouseEvent * event )
 {
     bool left = event->button() == Qt::LeftButton;
     //bool right = event->button() == Qt::RightButton;
-    //bool mid = event->button() == Qt::MidButton;
+    bool mid = event->button() == Qt::MidButton;
     lvPoint pt (event->x(), event->y());
     ldomXPointer p = _docview->getNodeByPoint( pt );
+    // test imageByPoint
+    LVImageSourceRef img = _docview->getImageByPoint(pt);
+    if (!img.isNull())
+        CRLog::debug("Image %d x %d found", img->GetWidth(), img->GetHeight());
+    CRBookmark * bmk = _docview->findBookmarkByPoint(pt);
+    if (bmk!=NULL) {
+        CRLog::trace("Found bookmark of type %d", bmk->getType());
+        if (mid)
+            AddBookmarkDialog::editBookmark((QWidget*)parent(), this, bmk);
+    }
     lString16 path;
     lString16 href;
     if ( !p.isNull() ) {

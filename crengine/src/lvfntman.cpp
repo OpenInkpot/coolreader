@@ -30,9 +30,9 @@
 #if 0
 #define USE_FREETYPE 1
 #define USE_FONTCONFIG 1
-#define DEBUG_FONT_SYNTHESIS 1
-#define DEBUG_FONT_MAN 1
-#define DEBUG_FONT_MAN_LOG_FILE "/tmp/font_man.log"
+//#define DEBUG_FONT_SYNTHESIS 1
+//#define DEBUG_FONT_MAN 1
+//#define DEBUG_FONT_MAN_LOG_FILE "/tmp/font_man.log"
 #endif
 
 #define GAMMA_TABLES_IMPL
@@ -68,6 +68,8 @@
 
 //DEFINE_NULL_REF( LVFont )
 
+
+inline int myabs(int n) { return n < 0 ? -n : n; }
 
 LVFontManager * fontMan = NULL;
 
@@ -171,6 +173,8 @@ static lChar16 getReplacementChar( lUInt16 code ) {
     case 0x201d:
     case 0x201e:
     case 0x201f:
+    case 0x00ab:
+    case 0x00bb:
         return '\"';
     case 0x2039:
         return '<';
@@ -423,7 +427,7 @@ static LVFontGlyphCacheItem * newItem( LVFontLocalGlyphCache * local_cache, lCha
     }
     item->origin_x =   (lInt8)slot->bitmap_left;
     item->origin_y =   (lInt8)slot->bitmap_top;
-    item->advance =    (lUInt8)(slot->metrics.horiAdvance >> 6);
+    item->advance =    (lUInt8)(myabs(slot->metrics.horiAdvance) >> 6);
     return item;
 }
 
@@ -582,6 +586,7 @@ protected:
     LVFontLocalGlyphCache _glyph_cache;
     bool          _drawMonochrome;
     bool          _allowKerning;
+    hinting_mode_t _hintingMode;
     bool          _fallbackFontIsSet;
     LVFontRef     _fallbackFont;
 public:
@@ -616,12 +621,13 @@ public:
     LVFreeTypeFace( LVMutex &mutex, FT_Library  library, LVFontGlobalGlyphCache * globalCache )
     : _mutex(mutex), _fontFamily(css_ff_sans_serif), _library(library), _face(NULL), _size(0), _hyphen_width(0), _baseline(0)
     , _weight(400), _italic(0)
-    , _glyph_cache(globalCache), _drawMonochrome(false), _allowKerning(false), _fallbackFontIsSet(false)
+    , _glyph_cache(globalCache), _drawMonochrome(false), _allowKerning(false), _hintingMode(HINTING_MODE_AUTOHINT), _fallbackFontIsSet(false)
     {
         _matrix.xx = 0x10000;
         _matrix.yy = 0x10000;
         _matrix.xy = 0;
         _matrix.yx = 0;
+        _hintingMode = fontMan->GetHintingMode();
     }
 
     virtual ~LVFreeTypeFace()
@@ -642,6 +648,17 @@ public:
     /// get kerning mode: true==ON, false=OFF
     virtual void setKerning( bool kerningEnabled ) { _allowKerning = kerningEnabled; }
 
+    /// sets current hinting mode
+    virtual void setHintingMode(hinting_mode_t mode) {
+        if (_hintingMode == mode)
+            return;
+        _hintingMode = mode;
+        _glyph_cache.clear();
+        _wcache.clear();
+    }
+    /// returns current hinting mode
+    virtual hinting_mode_t  getHintingMode() const { return _hintingMode; }
+
     /// get bitmap mode (true=bitmap, false=antialiased)
     virtual bool getBitmapMode() { return _drawMonochrome; }
     /// set bitmap mode (true=bitmap, false=antialiased)
@@ -656,6 +673,7 @@ public:
 
     bool loadFromFile( const char * fname, int index, int size, css_font_family_t fontFamily, bool monochrome, bool italicize )
     {
+        _hintingMode = fontMan->GetHintingMode();
         _drawMonochrome = monochrome;
         _fontFamily = fontFamily;
         if ( fname )
@@ -755,18 +773,24 @@ public:
                 return fallback->getGlyphInfo(code, glyph, def_char);
             }
         }
+        int flags = FT_LOAD_DEFAULT;
+        flags |= (!_drawMonochrome ? FT_LOAD_TARGET_NORMAL : FT_LOAD_TARGET_MONO);
+        if (_hintingMode == HINTING_MODE_AUTOHINT)
+            flags |= FT_LOAD_FORCE_AUTOHINT;
+        else if (_hintingMode == HINTING_MODE_DISABLED)
+            flags |= FT_LOAD_NO_AUTOHINT | FT_LOAD_NO_HINTING;
         updateTransform();
         int error = FT_Load_Glyph(
             _face,          /* handle to face object */
             glyph_index,   /* glyph index           */
-            FT_LOAD_DEFAULT );  /* load flags, see below */
+            flags );  /* load flags, see below */
         if ( error )
             return false;
         glyph->blackBoxX = (lUInt8)(_slot->metrics.width >> 6);
         glyph->blackBoxY = (lUInt8)(_slot->metrics.height >> 6);
         glyph->originX =   (lInt8)(_slot->metrics.horiBearingX >> 6);
         glyph->originY =   (lInt8)(_slot->metrics.horiBearingY >> 6);
-        glyph->width =     (lUInt8)(_slot->metrics.horiAdvance >> 6);
+        glyph->width =     (lUInt8)(myabs(_slot->metrics.horiAdvance) >> 6);
         return true;
     }
 /*
@@ -962,6 +986,10 @@ public:
         if ( !item ) {
 
             int rend_flags = FT_LOAD_RENDER | ( !_drawMonochrome ? FT_LOAD_TARGET_NORMAL : (FT_LOAD_TARGET_MONO) ); //|FT_LOAD_MONOCHROME|FT_LOAD_FORCE_AUTOHINT
+            if (_hintingMode == HINTING_MODE_AUTOHINT)
+                rend_flags |= FT_LOAD_FORCE_AUTOHINT;
+            else if (_hintingMode == HINTING_MODE_DISABLED)
+                rend_flags |= FT_LOAD_NO_AUTOHINT | FT_LOAD_NO_HINTING;
             /* load glyph image into the slot (erase previous one) */
 
             updateTransform();
@@ -1467,7 +1495,7 @@ public:
             if ( item ) {
                 // avoid soft hyphens inside text string
                 w = item->advance;
-                if ( item->bmp_height && item->bmp_height && (!isHyphen || i>=len-1) ) {
+                if ( item->bmp_width && item->bmp_height && (!isHyphen || i>=len-1) ) {
                     buf->Draw( x + item->origin_x,
                         y + _baseline - item->origin_y,
                         item->bmp,
@@ -1508,6 +1536,11 @@ public:
     {
         _baseFont->setBitmapMode( m );
     }
+
+    /// sets current hinting mode
+    virtual void setHintingMode(hinting_mode_t mode) { _baseFont->setHintingMode(mode); }
+    /// returns current hinting mode
+    virtual hinting_mode_t  getHintingMode() const { return _baseFont->getHintingMode(); }
 
     /// get kerning mode: true==ON, false=OFF
     virtual bool getKerning() const { return _baseFont->getKerning(); }
@@ -1631,12 +1664,31 @@ public:
         }
     }
 
+    /// sets current gamma level
+    virtual void SetHintingMode(hinting_mode_t mode) {
+        if (_hintingMode == mode)
+            return;
+        CRLog::debug("Hinting mode is changed: %d", (int)mode);
+        _hintingMode = mode;
+        gc();
+        clearGlyphCache();
+        LVPtrVector< LVFontCacheItem > * fonts = _cache.getInstances();
+        for ( int i=0; i<fonts->length(); i++ ) {
+            fonts->get(i)->getFont()->setHintingMode(mode);
+        }
+    }
+
+    /// sets current gamma level
+    virtual hinting_mode_t  GetHintingMode() {
+        return _hintingMode;
+    }
+
     /// set antialiasing mode
     virtual void setKerning( bool kerning )
     {
     
         _allowKerning = kerning; 
-        gc(); 
+        gc();
         clearGlyphCache();
         LVPtrVector< LVFontCacheItem > * fonts = _cache.getInstances();
         for ( int i=0; i<fonts->length(); i++ ) {
@@ -2542,7 +2594,7 @@ int LVFontDef::CalcDuplicateMatch( const LVFontDef & def ) const
     bool weight_match = (_weight==-1 || def._weight==-1) ? true 
         : (def._weight == _weight);
     bool italic_match = (_italic == def._italic || _italic==-1 || def._italic==-1);
-    bool family_match = (_family==css_ff_inherit || def._family==css_ff_inherit || def._family == def._family);
+    bool family_match = (_family==css_ff_inherit || def._family==css_ff_inherit || def._family == _family);
     bool typeface_match = (_typeface == def._typeface);
     return size_match && weight_match && italic_match && family_match && typeface_match;
 }
@@ -2561,7 +2613,7 @@ int LVFontDef::CalcMatch( const LVFontDef & def ) const
     int italic_match = (_italic == def._italic || _italic==-1 || def._italic==-1) ? 256 : 0;
     if ( (_italic==2 || def._italic==2) && _italic>0 && def._italic>0 )
         italic_match = 128;
-    int family_match = (_family==css_ff_inherit || def._family==css_ff_inherit || def._family == def._family) 
+    int family_match = (_family==css_ff_inherit || def._family==css_ff_inherit || def._family == _family) 
         ? 256 
         : ( (_family==css_ff_monospace)==(def._family==css_ff_monospace) ? 64 : 0 );
     int typeface_match = (_typeface == def._typeface) ? 256 : 0;
@@ -2613,7 +2665,7 @@ void LVBaseFont::DrawTextString( LVDrawBuf * buf, int x, int y,
           if ( item ) {
               // avoid soft hyphens inside text string
               w = item->advance;
-              if ( item->bmp_height && item->bmp_height ) {
+              if ( item->bmp_width && item->bmp_height ) {
                   buf->Draw( x + item->origin_x,
                       y + baseline - item->origin_y,
                       item->bmp,
@@ -3540,6 +3592,8 @@ bool operator == (const LVFont & r1, const LVFont & r2)
             && r1.getItalic()==r2.getItalic()
             && r1.getFontFamily()==r2.getFontFamily()
             && r1.getTypeFace()==r2.getTypeFace()
-            && r1.getKerning()==r2.getKerning();
+            && r1.getKerning()==r2.getKerning()
+            && r1.getHintingMode()==r2.getHintingMode()
+            ;
 }
 

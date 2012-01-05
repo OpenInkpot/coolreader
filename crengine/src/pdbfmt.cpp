@@ -1,6 +1,9 @@
 #include "../include/pdbfmt.h"
 #include <ctype.h>
 
+// uncomment following line to save PDB content streams to /tmp
+//#define DUMP_PDB_CONTENTS
+
 struct PDBHdr
 {
     lUInt8    name[32];
@@ -259,6 +262,20 @@ struct EReaderHeader
     }
 };
 
+struct PluckerPreamble {
+    lUInt32 signature; // 	4 	Numeric 	Must contain the value 0x6C6E6368.
+    lUInt16 hdrVersion; // 	2 	Numeric 	Must have the value 3.
+    lUInt16 hdrEncoding; // 	2 	Numeric 	Must have the value 0.
+    lUInt16 verStrWords; // 	2 	Numeric 	The number of two-byte words following, containing the version string.
+//    char  	2 * verStrWords 	String 	NUL-terminated ISO Latin-1 string, padded at end if necessary with a zero byte to an even-byte boundary, containing a version string to display to the user containing version information for the document.
+//    pqaTitleWords 	2 	Numeric 	The number of two-byte words in the following pqaTitleStr.
+//    pqaTitleStr 	2 * pqaTitleWords 	String 	NUL-terminated ISO Latin-1 string, padded at end if necessary with a zero byte to an even-byte boundary, containing a title string for iconic display of the document.
+//    iconWords 	2 	Numeric 	Number of two-byte words in the following icon image.
+//    icon 	2 * iconWords 	Image 	Image (32x32) in Palm image format to be used as an icon to represent the document on a desktop-style display. The image may not use a custom color map.
+//    smIconWords 	2 	Numeric 	Number of two-byte words in the following icon image.
+//    smIcon 	2 * smIconWords 	Image 	Small image (15x9) in Palm image format to be used as an icon to represent the document on a desktop-style display. The image may not use a custom color map.
+};
+
 /// unpack data from _compbuf to _buf
 bool ldomUnpack( const lUInt8 * compbuf, int compsize, lUInt8 * &dstbuf, lUInt32 & dstsize  );
 
@@ -356,6 +373,16 @@ static bool pattern_cmp( const lUInt8 * buf, const char * pattern ) {
 }
 
 class PDBFile : public LVNamedStream {
+public:
+    enum Format {
+        UNKNOWN,
+        PALMDOC,
+        EREADER,
+        PLUCKER,
+        MOBI,
+    };
+private:
+
     struct Record {
         lUInt32 offset;
         lUInt32 size;
@@ -364,13 +391,6 @@ class PDBFile : public LVNamedStream {
     };
     LVArray<Record> _records;
     LVStreamRef _stream;
-    enum Format {
-        UNKNOWN,
-        PALMDOC,
-        EREADER,
-        PLUCKER,
-        MOBI,
-    };
     Format _format;
     int _compression;
     lUInt32 _textSize;
@@ -568,8 +588,8 @@ public:
             _format = EREADER;
         if ( hdr.checkType("BOOK") && hdr.checkCreator("MOBI") )
             _format = MOBI;
-//        if ( hdr.checkType("Data") && hdr.checkCreator("Plkr") )
-//            _format = PLUCKER;
+        if ( hdr.checkType("Data") && hdr.checkCreator("Plkr") )
+            _format = PLUCKER;
 //        if ( hdr.checkType("ToGo") && hdr.checkCreator("ToGo") )
 //            _format = ISILO;
         if ( _format==UNKNOWN )
@@ -678,6 +698,9 @@ public:
                 _compression = 0;
             _textSize = preamble.textLength;
             _recordCount = preamble.recordCount;
+        } else if (_format==PLUCKER ) {
+            // TODO
+            return false;
         }
 
         detectFormat( contentFormat );
@@ -834,9 +857,12 @@ public:
         return _pos>=_textSize;
     }
 
+    Format getFormat() { return _format; }
+
     /// Constructor
     PDBFile() {
         //_container.AddRef();
+        _bufIndex = -1;
     }
 
     /// Destructor
@@ -892,12 +918,13 @@ bool ImportPDBDocument( LVStreamRef & stream, ldomDocument * doc, LVDocViewCallb
         {
             ldomDocumentWriterFilter writerFilter(doc, false,
                     HTML_AUTOCLOSE_TABLE);
-
             LVHTMLParser parser(stream, &writerFilter);
             parser.setProgressCallback(progressCallback);
             if ( !parser.CheckFormat() ) {
                 return false;
             } else {
+                if (pdb->getFormat()==PDBFile::MOBI)
+                    parser.SetCharset(L"utf-8");
                 if (!parser.Parse()) {
                     return false;
                 }
@@ -937,6 +964,34 @@ bool ImportPDBDocument( LVStreamRef & stream, ldomDocument * doc, LVDocViewCallb
         }
         break;
     }
+#ifdef DUMP_PDB_CONTENTS
+    for (int i=0; i<container->GetObjectCount(); i++) {
+        const LVContainerItemInfo * item = container->GetObjectInfo(i);
+        if (item->IsContainer())
+            continue;
+        lString16 fn = item->GetName();
+        if (fn.empty())
+            fn = lString16("pdb_item_") + lString16::itoa(i);
+        fn = lString16("/tmp/") + fn;
+        LVStreamRef in = container->OpenStream(item->GetName(), LVOM_READ);
+        if (in.isNull())
+            continue;
+        LVStreamRef out = LVOpenFileStream(fn.c_str(), LVOM_WRITE);
+        if (out.isNull())
+            continue;
+        CRLog::trace("Dumping stream %s (%d)", LCSTR(fn), (int)item->GetSize());
+        LVPumpStream(out.get(), in.get());
+    }
+    {
+        LVStreamRef out = LVOpenFileStream("/tmp/pdb_main.txt", LVOM_WRITE);
+        if (!out.isNull()) {
+            stream->SetPos(0);
+            CRLog::trace("Dumping stream /tmp/pdb_main.txt (%d)", (int)stream->GetSize());
+            LVPumpStream(out.get(), stream.get());
+            stream->SetPos(0);
+        }
+    }
+#endif
 
     return true;
 }
