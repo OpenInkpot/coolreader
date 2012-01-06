@@ -1,3 +1,9 @@
+cr3 (3.0.54-38.oi1) zelazny; urgency=low
+
+  * Merge with upstream
+
+ -- Alexander Kerner <lunohod@openinkpot.org>  Fri, 06 Jan 2012 12:23:54 +0100
+
 cr3 (3.0.51-8.oi1) zelazny; urgency=low
 
   * Merge with upstream
