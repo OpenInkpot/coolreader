@@ -90,6 +90,26 @@ if ( ${GUI} STREQUAL CRGUI_XCB )
     INSTALL( DIRECTORY ${CMAKE_BINARY_DIR}${CMAKE_DATA_DIR}/i18n/ DESTINATION share/locale
       FILES_MATCHING PATTERN "*.mo" )
 
+elseif ( ${GUI} STREQUAL CRGUI_WL )
+
+    ADD_DEFINITIONS( -DUSE_FONTCONFIG=1 )
+    SET(CR3_SOURCES ${CR3_SOURCES} src/cr3wayland.cpp)
+    SET (EXTRA_LIBS fontconfig wayland-client rt)
+    IF (GETTEXT_FOUND)
+        SET (EXTRA_LIBS ${EXTRA_LIBS} ${GETTEXT_LIBRARIES})
+    ELSE(${GETTEXT_FOUND})
+        MESSAGE("Gettext not found")
+    ENDIF (GETTEXT_FOUND)
+    IF (${DEVICE_NAME} STREQUAL all)
+        INSTALL( DIRECTORY data/devices/v3/skins DESTINATION share/cr3/v3 )
+        INSTALL( DIRECTORY data/devices/n516/skins DESTINATION share/cr3/n516 )
+        INSTALL( DIRECTORY data/devices/v3/keymaps/ DESTINATION share/cr3/v3 )
+        INSTALL( DIRECTORY data/devices/n516/keymaps/ DESTINATION share/cr3/n516 )
+    ELSE()
+        INSTALL( DIRECTORY data/devices/${DEVICE_NAME}/skins DESTINATION share/cr3 )
+        INSTALL( DIRECTORY data/devices/${DEVICE_NAME}/keymaps DESTINATION share/cr3 )
+    ENDIF(${DEVICE_NAME} STREQUAL all)
+
 elseif ( ${GUI} STREQUAL CRGUI_QT )
 
     FIND_PACKAGE( Qt4 REQUIRED )
